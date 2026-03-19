@@ -9,6 +9,12 @@ require('dotenv').config();
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+console.log("ENV PORT:", process.env.PORT);  // 👈 ADD THIS
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.use(cors());
