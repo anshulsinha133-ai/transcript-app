@@ -9,10 +9,6 @@ require('dotenv').config();
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Transcript server running on port ${PORT}`);
-});
-
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.use(cors());
@@ -52,7 +48,7 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream(filePath),
       model: 'whisper-1',
-            response_format: 'verbose_json',
+      response_format: 'verbose_json',
     });
     fs.unlinkSync(filePath);
     res.json({
@@ -89,8 +85,6 @@ app.post('/summarize', async (req, res) => {
   }
 });
 
-const port = process.env.PORT || 3000;
-  console.log('Transcript server running on port ' + port);
-  console.log('Local:   http://localhost:' + port + '/health');
-  console.log('Network: http://YOUR_LAPTOP_IP:' + port + '/health');
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('Transcript server running on port ' + PORT);
 });
