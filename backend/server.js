@@ -7,7 +7,11 @@ const OpenAI  = require('openai');
 require('dotenv').config();
 
 const app  = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Transcript server running on port ${PORT}`);
+});
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -85,7 +89,7 @@ app.post('/summarize', async (req, res) => {
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
+const port = process.env.PORT || 3000;
   console.log('Transcript server running on port ' + port);
   console.log('Local:   http://localhost:' + port + '/health');
   console.log('Network: http://YOUR_LAPTOP_IP:' + port + '/health');
