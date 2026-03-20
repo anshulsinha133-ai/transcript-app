@@ -88,7 +88,8 @@ export default function RecordScreen({ navigation }) {
       setIsProcessing(true);
       setStatusText('Processing chunk...');
 
-      await recordingRef.current.pauseAsync();
+      // Stop current recording and get URI
+      await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
 
       if (uri) {
@@ -110,8 +111,12 @@ export default function RecordScreen({ navigation }) {
         }
       }
 
+      // Start a fresh recording if still recording
       if (isRecordingRef.current) {
-        await recordingRef.current.resumeAsync();
+        const { recording: newRecording } = await Audio.Recording.createAsync(
+          Audio.RecordingOptionsPresets.HIGH_QUALITY
+        );
+        recordingRef.current = newRecording;
         setStatusText('Recording... speak now');
       }
 
