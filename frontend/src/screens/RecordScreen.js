@@ -1,115 +1,265 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, Alert
+  SafeAreaView, Alert, ScrollView, ActivityIndicator
 } from 'react-native';
 import { Audio } from 'expo-av';
-import { transcribeAudio } from '../services/api';
+import { transcribeChunk } from '../services/api';
 import { saveTranscript, createTranscriptObj } from '../utils/storage';
+
+const CHUNK_INTERVAL = 30000;
 
 export default function RecordScreen({ navigation }) {
   const [isRecording,    setIsRecording]    = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [recordingTime,  setRecordingTime]  = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState('');
   const [statusText,     setStatusText]     = useState('Tap to start recording');
-  const recordingRef = useRef(null);
-  const timerRef     = useRef(null);
+  const [recordingTime,  setRecordingTime]  = useState(0);
+  const [isProcessing,   setIsProcessing]   = useState(false);
+  const [language,       setLanguage]       = useState('auto');
+  const [chunkCount,     setChunkCount]     = useState(0);
 
-  const requestPermissions = async () => {
-    const { status } = await Audio.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Microphone access is needed to record audio.');
-      return false;
-    }
-    return true;
+  const recordingRef   = useRef(null);
+  const timerRef       = useRef(null);
+  const chunkTimerRef  = useRef(null);
+  const liveTextRef    = useRef('');
+  const isRecordingRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      clearInterval(timerRef.current);
+      clearInterval(chunkTimerRef.current);
+      if (recordingRef.current) {
+        recordingRef.current.stopAndUnloadAsync();
+      }
+    };
+  }, []);
+
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   };
 
   const startRecording = async () => {
-    const allowed = await requestPermissions();
-    if (!allowed) return;
     try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        Alert.alert('Permission needed', 'Please allow microphone access');
+        return;
+      }
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
-        playsInSilentModeIOS: true
+        playsInSilentModeIOS: true,
       });
+
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-      recordingRef.current = recording;
+
+      recordingRef.current   = recording;
+      isRecordingRef.current = true;
       setIsRecording(true);
-      setStatusText('Recording... Speak now');
-      timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
+      setLiveTranscript('');
+      setRecordingTime(0);
+      liveTextRef.current = '';
+      setChunkCount(0);
+      setStatusText('Recording... speak now');
+
+      timerRef.current = setInterval(() => {
+        setRecordingTime(t => t + 1);
+      }, 1000);
+
+      chunkTimerRef.current = setInterval(async () => {
+        if (isRecordingRef.current) {
+          await processCurrentChunk();
+        }
+      }, CHUNK_INTERVAL);
+
     } catch (err) {
       Alert.alert('Error', 'Could not start recording: ' + err.message);
     }
   };
 
-  const stopAndTranscribe = async () => {
-    if (!recordingRef.current) return;
-    clearInterval(timerRef.current);
-    setIsRecording(false);
-    setIsTranscribing(true);
-    setStatusText('Transcribing with AI...');
+  const processCurrentChunk = async () => {
+    if (!recordingRef.current || !isRecordingRef.current) return;
+
     try {
-      await recordingRef.current.stopAndUnloadAsync();
+      setIsProcessing(true);
+      setStatusText('Processing chunk...');
+
+      await recordingRef.current.pauseAsync();
       const uri = recordingRef.current.getURI();
-      const result = await transcribeAudio(
-  uri,
-  'recording.m4a',
-  'audio/m4a',
-  'auto',
-  (message, percent) => {
-    setStatusText(message + ' ' + percent + '%');
-  }
-);
-      if (result.success) {
-        const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
-        const obj   = createTranscriptObj(title, result.transcript, recordingTime, uri);
-        const saved = await saveTranscript(obj);
-        if (!saved) {
-          Alert.alert('Warning', 'Transcript could not be saved to cloud');
+
+      if (uri) {
+        setChunkCount(c => c + 1);
+        const result = await transcribeChunk(
+          uri,
+          'chunk.m4a',
+          'audio/m4a',
+          language,
+          liveTextRef.current
+        );
+
+        if (result.success && result.text) {
+          const newText = liveTextRef.current
+            ? liveTextRef.current + ' ' + result.text
+            : result.text;
+          liveTextRef.current = newText;
+          setLiveTranscript(newText);
         }
-        setStatusText('Transcription complete!');
-        navigation.replace('Transcript', { transcript: obj });
       }
+
+      if (isRecordingRef.current) {
+        await recordingRef.current.resumeAsync();
+        setStatusText('Recording... speak now');
+      }
+
     } catch (err) {
-      setStatusText('Error: ' + err.message);
-      setIsTranscribing(false);
-      Alert.alert('Transcription Failed', err.message);
+      console.error('Chunk processing error:', err);
+      if (isRecordingRef.current) {
+        setStatusText('Recording... speak now');
+      }
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const formatTime = (s) =>
-    String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  const stopRecording = async () => {
+    try {
+      clearInterval(timerRef.current);
+      clearInterval(chunkTimerRef.current);
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      setStatusText('Processing final audio...');
+      setIsProcessing(true);
+
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+
+      if (uri) {
+        const result = await transcribeChunk(
+          uri,
+          'final.m4a',
+          'audio/m4a',
+          language,
+          liveTextRef.current
+        );
+
+        let finalText = liveTextRef.current;
+        if (result.success && result.text) {
+          finalText = liveTextRef.current
+            ? liveTextRef.current + ' ' + result.text
+            : result.text;
+        }
+
+        if (finalText) {
+          const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
+          const obj   = createTranscriptObj(title, finalText, recordingTime);
+          await saveTranscript(obj);
+          setStatusText('Transcript saved! ✅');
+          setLiveTranscript(finalText);
+          setTimeout(() => navigation.navigate('Home'), 1500);
+        } else {
+          setStatusText('No speech detected. Try again.');
+        }
+      }
+
+    } catch (err) {
+      Alert.alert('Error', 'Could not stop recording: ' + err.message);
+      setStatusText('Tap to start recording');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
-      <Text style={styles.title}>Live Recording</Text>
-      <Text style={styles.timer}>{formatTime(recordingTime)}</Text>
-      <Text style={styles.status}>{statusText}</Text>
-      {isTranscribing
-        ? <ActivityIndicator size="large" color="#1A56A0" style={{ marginTop: 40 }} />
-        : <TouchableOpacity
-            style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
-            onPress={isRecording ? stopAndTranscribe : startRecording}>
-            <Text style={styles.recordBtnText}>{isRecording ? 'Stop' : 'Record'}</Text>
+
+      <View style={styles.langRow}>
+        {['auto', 'en', 'hi'].map(lang => (
+          <TouchableOpacity
+            key={lang}
+            style={[styles.langBtn, language === lang && styles.langBtnActive]}
+            onPress={() => !isRecording && setLanguage(lang)}>
+            <Text style={[styles.langText, language === lang && styles.langTextActive]}>
+              {lang === 'auto' ? 'Auto' : lang === 'en' ? 'English' : 'हिंदी'}
+            </Text>
           </TouchableOpacity>
-      }
-      {isRecording && <Text style={styles.hint}>Tap Stop when finished</Text>}
+        ))}
+      </View>
+
+      <Text style={styles.timer}>{formatTime(recordingTime)}</Text>
+
+      <View style={styles.statusRow}>
+        {isProcessing && <ActivityIndicator color="#1A56A0" size="small" />}
+        <Text style={styles.statusText}>{statusText}</Text>
+      </View>
+
+      {chunkCount > 0 && (
+        <Text style={styles.chunkText}>
+          {chunkCount} chunk{chunkCount > 1 ? 's' : ''} processed ✅
+        </Text>
+      )}
+
+      {liveTranscript ? (
+        <ScrollView style={styles.liveBox}>
+          <Text style={styles.liveLabel}>Live Transcript</Text>
+          <Text style={styles.liveText}>{liveTranscript}</Text>
+        </ScrollView>
+      ) : (
+        <View style={styles.emptyBox}>
+          <Text style={styles.emptyText}>
+            {isRecording
+              ? 'Your transcript will appear here in 30 seconds...'
+              : 'Start recording to see live transcript'}
+          </Text>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
+        onPress={isRecording ? stopRecording : startRecording}
+        disabled={isProcessing && !isRecording}>
+        <Text style={styles.recordBtnText}>
+          {isRecording ? '⏹ Stop Recording' : '🎙 Start Recording'}
+        </Text>
+      </TouchableOpacity>
+
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container:       { flex: 1, backgroundColor: '#F5F7FA', alignItems: 'center', justifyContent: 'center' },
-  title:           { fontSize: 22, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 12 },
-  timer:           { fontSize: 52, fontWeight: 'bold', color: '#1A56A0' },
-  status:          { fontSize: 15, color: '#666', marginTop: 12, marginBottom: 40 },
-  recordBtn:       { width: 120, height: 120, borderRadius: 60, backgroundColor: '#1A56A0',
-                     justifyContent: 'center', alignItems: 'center',
-                     shadowColor: '#1A56A0', shadowOffset: { width: 0, height: 4 },
-                     shadowOpacity: 0.4, shadowRadius: 8, elevation: 8 },
-  recordBtnActive: { backgroundColor: '#B22222' },
-  recordBtnText:   { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
-  hint:            { marginTop: 24, fontSize: 13, color: '#888' },
+  container:       { flex: 1, backgroundColor: '#F5F7FA', padding: 20 },
+  langRow:         { flexDirection: 'row', justifyContent: 'center',
+                     gap: 10, marginBottom: 20, marginTop: 10 },
+  langBtn:         { paddingHorizontal: 20, paddingVertical: 8,
+                     borderRadius: 20, borderWidth: 1.5,
+                     borderColor: '#1A56A0' },
+  langBtnActive:   { backgroundColor: '#1A56A0' },
+  langText:        { color: '#1A56A0', fontSize: 14, fontWeight: '600' },
+  langTextActive:  { color: '#FFFFFF' },
+  timer:           { fontSize: 52, fontWeight: 'bold', color: '#0D3B7A',
+                     textAlign: 'center', marginBottom: 10 },
+  statusRow:       { flexDirection: 'row', alignItems: 'center',
+                     justifyContent: 'center', gap: 8, marginBottom: 8 },
+  statusText:      { fontSize: 14, color: '#666', textAlign: 'center' },
+  chunkText:       { fontSize: 12, color: '#1A7A4A', textAlign: 'center',
+                     marginBottom: 12 },
+  liveBox:         { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12,
+                     padding: 16, marginBottom: 20,
+                     borderWidth: 1, borderColor: '#DCE9F8' },
+  liveLabel:       { fontSize: 12, fontWeight: 'bold', color: '#1A56A0',
+                     marginBottom: 8 },
+  liveText:        { fontSize: 15, color: '#333', lineHeight: 26 },
+  emptyBox:        { flex: 1, justifyContent: 'center',
+                     alignItems: 'center', marginBottom: 20 },
+  emptyText:       { fontSize: 14, color: '#aaa', textAlign: 'center',
+                     paddingHorizontal: 40 },
+  recordBtn:       { backgroundColor: '#1A56A0', padding: 18,
+                     borderRadius: 14, alignItems: 'center' },
+  recordBtnActive: { backgroundColor: '#C0392B' },
+  recordBtnText:   { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
 });
