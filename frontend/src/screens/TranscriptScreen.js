@@ -29,9 +29,14 @@ export default function TranscriptScreen({ route }) {
 
   const getSummary = async () => {
     setLoadingSummary(true);
+    setSummary(null);
     try {
       const result = await summarizeTranscript(transcript.text);
-      setSummary(result.summary);
+      if (result.success) {
+        setSummary(result.summary);
+      } else {
+        Alert.alert('Error', 'Could not generate summary. Please try again.');
+      }
     } catch (err) {
       Alert.alert('Error', err.message);
     }

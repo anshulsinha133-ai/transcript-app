@@ -53,7 +53,15 @@ export default function RecordScreen({ navigation }) {
     try {
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
-      const result = await transcribeAudio(uri, 'recording.m4a', 'audio/m4a');
+      const result = await transcribeAudio(
+  uri,
+  'recording.m4a',
+  'audio/m4a',
+  'auto',
+  (message, percent) => {
+    setStatusText(message + ' ' + percent + '%');
+  }
+);
       if (result.success) {
         const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
         const obj   = createTranscriptObj(title, result.transcript, recordingTime, uri);
