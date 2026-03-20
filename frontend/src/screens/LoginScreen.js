@@ -86,8 +86,8 @@ export default function LoginScreen() {
         style={styles.inner}>
 
         <View style={styles.header}>
-          <Text style={styles.appName}>Transcript AI</Text>
-          <Text style={styles.tagline}>Your AI-powered transcription app</Text>
+          <Text style={styles.appName}>VoxNote</Text>
+          <Text style={styles.tagline}>Speak. Transcribe. Remember.</Text>
         </View>
 
         <View style={styles.tabs}>
