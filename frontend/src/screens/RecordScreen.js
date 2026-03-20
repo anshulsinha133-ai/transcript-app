@@ -4,7 +4,7 @@ import {
   SafeAreaView, Alert, ScrollView, ActivityIndicator
 } from 'react-native';
 import { Audio } from 'expo-av';
-import { transcribeChunk } from '../services/api';
+import { transcribeChunk, transcribeWithSpeakers } from '../services/api';
 import { saveTranscript, createTranscriptObj } from '../utils/storage';
 
 const CHUNK_INTERVAL = 30000;
@@ -131,7 +131,7 @@ export default function RecordScreen({ navigation }) {
       clearInterval(chunkTimerRef.current);
       isRecordingRef.current = false;
       setIsRecording(false);
-      setStatusText('Processing final audio...');
+      setStatusText('Processing with speaker detection...');
       setIsProcessing(true);
 
       await recordingRef.current.stopAndUnloadAsync();
@@ -139,27 +139,25 @@ export default function RecordScreen({ navigation }) {
       recordingRef.current = null;
 
       if (uri) {
-        const result = await transcribeChunk(
+        const result = await transcribeWithSpeakers(
           uri,
-          'final.m4a',
-          'audio/m4a',
           language,
-          liveTextRef.current
+          (message, percent) => {
+            setStatusText(message + ' ' + percent + '%');
+          }
         );
 
-        let finalText = liveTextRef.current;
         if (result.success && result.text) {
-          finalText = liveTextRef.current
-            ? liveTextRef.current + ' ' + result.text
-            : result.text;
-        }
-
-        if (finalText) {
           const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
-          const obj   = createTranscriptObj(title, finalText, recordingTime);
+          const obj   = {
+            ...createTranscriptObj(title, result.text, recordingTime),
+            utterances: result.utterances,
+            words:      result.words,
+            audioPath:  uri,
+          };
           await saveTranscript(obj);
           setStatusText('Transcript saved! ✅');
-          setLiveTranscript(finalText);
+          setLiveTranscript(result.text);
           setTimeout(() => navigation.navigate('Home'), 1500);
         } else {
           setStatusText('No speech detected. Try again.');

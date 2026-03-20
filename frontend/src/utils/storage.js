@@ -1,6 +1,5 @@
 import { supabase } from '../supabase';
 
-// Save transcript to Supabase
 export const saveTranscript = async (transcriptObj) => {
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -15,6 +14,8 @@ export const saveTranscript = async (transcriptObj) => {
         duration:   transcriptObj.duration,
         word_count: transcriptObj.wordCount,
         audio_path: transcriptObj.audioPath,
+        utterances: transcriptObj.utterances || null,
+        words:      transcriptObj.words      || null,
       });
 
     if (error) throw error;
@@ -25,7 +26,6 @@ export const saveTranscript = async (transcriptObj) => {
   }
 };
 
-// Get all transcripts for logged in user
 export const getAllTranscripts = async () => {
   try {
     const { data, error } = await supabase
@@ -36,13 +36,15 @@ export const getAllTranscripts = async () => {
     if (error) throw error;
 
     return data.map(t => ({
-      id:        t.id,
-      title:     t.title,
-      text:      t.text,
-      duration:  t.duration,
-      wordCount: t.word_count,
-      audioPath: t.audio_path,
-      createdAt: t.created_at,
+      id:         t.id,
+      title:      t.title,
+      text:       t.text,
+      duration:   t.duration,
+      wordCount:  t.word_count,
+      audioPath:  t.audio_path,
+      utterances: t.utterances || null,
+      words:      t.words      || null,
+      createdAt:  t.created_at,
     }));
   } catch (err) {
     console.error('Load error:', err);
@@ -50,7 +52,6 @@ export const getAllTranscripts = async () => {
   }
 };
 
-// Delete a transcript by id
 export const deleteTranscript = async (id) => {
   try {
     const { error } = await supabase
@@ -66,13 +67,21 @@ export const deleteTranscript = async (id) => {
   }
 };
 
-// Create transcript object
-export const createTranscriptObj = (title, text, duration, audioPath = null) => ({
-  id:        Date.now().toString(),
-  title:     title,
-  text:      text,
-  duration:  duration,
-  audioPath: audioPath,
-  createdAt: new Date().toISOString(),
-  wordCount: text.split(' ').length,
+export const createTranscriptObj = (
+  title,
+  text,
+  duration,
+  audioPath  = null,
+  utterances = null,
+  words      = null
+) => ({
+  id:         Date.now().toString(),
+  title:      title,
+  text:       text,
+  duration:   duration,
+  audioPath:  audioPath,
+  utterances: utterances,
+  words:      words,
+  createdAt:  new Date().toISOString(),
+  wordCount:  text ? text.split(' ').length : 0,
 });
