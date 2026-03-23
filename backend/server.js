@@ -141,7 +141,7 @@ app.post('/transcribe-speakers', async (req, res) => {
       language_code:     language || 'en',
       format_text:       true,
       punctuate:         true,
-      speech_model:      'universal-2',
+      speech_models:     ['universal-2'],
     });
 
     console.log('Transcript status:', transcript.status);
