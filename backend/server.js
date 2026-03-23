@@ -137,7 +137,7 @@ app.post('/transcribe-speakers', async (req, res) => {
     const transcript = await aai.transcripts.transcribe({
       audio:             uploadUrl,
       speaker_labels:    true,
-      speakers_expected: 2,
+      speakers_expected: 5,
       language_code:     language || 'en',
       format_text:       true,
       punctuate:         true,
