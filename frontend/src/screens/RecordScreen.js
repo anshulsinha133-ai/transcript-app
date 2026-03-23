@@ -88,7 +88,6 @@ export default function RecordScreen({ navigation }) {
       setIsProcessing(true);
       setStatusText('Processing chunk...');
 
-      // Stop current recording and get URI
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
 
@@ -111,7 +110,6 @@ export default function RecordScreen({ navigation }) {
         }
       }
 
-      // Start a fresh recording if still recording
       if (isRecordingRef.current) {
         const { recording: newRecording } = await Audio.Recording.createAsync(
           Audio.RecordingOptionsPresets.HIGH_QUALITY
@@ -152,20 +150,30 @@ export default function RecordScreen({ navigation }) {
           }
         );
 
-        if (result.success && result.text) {
+        // Show debug alert so we can see exactly what came back
+        Alert.alert(
+          'Debug Result',
+          `Success: ${result.success}\nError: ${result.error || 'none'}\nText: ${result.text?.substring(0, 100) || 'empty'}\nUtterances: ${result.utterances?.length || 0}`
+        );
+
+        if (result.success) {
+          const text = result.text || 
+            result.utterances?.map(u => u.text).join(' ') || 
+            'Recording saved';
+          
           const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
           const obj   = {
-            ...createTranscriptObj(title, result.text, recordingTime),
+            ...createTranscriptObj(title, text, recordingTime),
             utterances: result.utterances,
             words:      result.words,
             audioPath:  uri,
           };
           await saveTranscript(obj);
           setStatusText('Transcript saved! ✅');
-          setLiveTranscript(result.text);
-          setTimeout(() => navigation.navigate('Home'), 1500);
+          setLiveTranscript(text);
+          setTimeout(() => navigation.navigate('Home'), 2000);
         } else {
-          setStatusText('No speech detected. Try again.');
+          setStatusText('Error: ' + (result.error || 'Unknown error'));
         }
       }
 
