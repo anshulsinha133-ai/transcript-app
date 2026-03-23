@@ -156,12 +156,12 @@ export default function RecordScreen({ navigation }) {
             'Recording saved';
 
           const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
-          const obj   = {
-            ...createTranscriptObj(title, text, recordingTime),
-            utterances: result.utterances,
-            words:      result.words,
-            audioPath:  uri,
-          };
+          const obj = {
+  ...createTranscriptObj(title, text, recordingTime),
+  utterances: result.utterances,
+  words:      result.words,
+  audioPath:  null,
+};
           await saveTranscript(obj);
           setStatusText('Transcript saved! ✅');
           setLiveTranscript(text);
@@ -267,4 +267,4 @@ const styles = StyleSheet.create({
                      borderRadius: 14, alignItems: 'center' },
   recordBtnActive: { backgroundColor: '#C0392B' },
   recordBtnText:   { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-});d
+});
