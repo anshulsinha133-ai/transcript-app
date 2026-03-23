@@ -107,32 +107,36 @@ app.post('/summarize', async (req, res) => {
   }
 });
 
-// ─── HELPER: Translate mixed language transcript to English ───
+// ─── HELPER: Translate Romanized Hindi/Marathi to English ───
 const translateToEnglish = async (text, mode) => {
   try {
     let systemPrompt = '';
 
     if (mode === 'mumbai') {
-      systemPrompt = `You are a translator specializing in Mumbai's mixed language communication.
-People in Mumbai naturally mix Hindi, Marathi, and English in one sentence.
-The transcript will contain Romanized Hindi/Marathi words mixed with English.
-Your job is to:
-1. Translate everything to clean, natural English
-2. Keep names, places, and technical terms as-is
-3. Keep the meaning and tone exactly the same
-4. Do not add any extra words or explanations
-Just return the translated text only.`;
-    } else if (mode === 'delhi') {
-      systemPrompt = `You are a translator specializing in Delhi's mixed language communication.
-People in Delhi naturally mix Hindi, Punjabi, and English in one sentence.
-Translate everything to clean, natural English.
-Keep names, places, and technical terms as-is.
-Just return the translated text only.`;
-    } else if (mode === 'hindi') {
+      systemPrompt = `You are a translator for Mumbai's mixed language speech.
+People in Mumbai mix Hindi, Marathi and English naturally in one sentence.
+The text is written in Roman script (English alphabet).
+Examples:
+- "Mujhe jana hai office" → "I need to go to office"
+- "Aaj meeting acchi thi, client satisfied aahe" → "Today's meeting was good, client is satisfied"
+- "Pudhe kaam karte hai, let's finalize by Friday" → "We will work ahead, let's finalize by Friday"
+Rules:
+1. Translate everything to clean natural English
+2. Keep names, places, company names as-is
+3. Keep technical terms as-is
+4. Match the tone — casual stays casual, formal stays formal
+5. Return ONLY the translated text, nothing else`;
+    } else if (mode === 'hi') {
       systemPrompt = `You are a Hindi to English translator.
-Translate the following Hindi text (written in Roman script) to clean English.
-Keep names, places, and technical terms as-is.
-Just return the translated text only.`;
+The Hindi text is written in Roman script (English alphabet).
+Examples:
+- "Mujhe jana hai tum chalogi" → "I need to go, will you come?"
+- "Aaj bahut kaam tha office mein" → "There was a lot of work in office today"
+- "Hum kal milenge" → "We will meet tomorrow"
+Rules:
+1. Translate to clean natural English
+2. Keep names and places as-is
+3. Return ONLY the translated text, nothing else`;
     } else {
       return null;
     }
@@ -162,18 +166,18 @@ const generateSummary = async (text) => {
         {
           role:    'system',
           content: `You are a meeting summarizer for Indian businesses.
-The transcript may contain mixed Hindi, Marathi, and English.
-Always respond in clear English.
+The transcript may contain Romanized Hindi, Marathi or English.
+Always respond in clear English only.
 Extract:
 1) One-line summary
 2) Key points discussed
-3) Action items with owners (if mentioned)
-4) Decisions made
+3) Action items (if any)
+4) Decisions made (if any)
 Be concise and professional.`
         },
         {
           role:    'user',
-          content: 'Summarize this transcript:\n\n' + text
+          content: 'Summarize this:\n\n' + text
         }
       ],
       max_tokens: 600,
@@ -195,7 +199,7 @@ app.post('/transcribe-speakers', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No audio data received' });
     }
 
-    console.log('Received audio, length:', audioBase64.length, 'mode:', mode);
+    console.log('Mode:', mode, '| Audio length:', audioBase64.length);
 
     // Convert base64 to Buffer
     const audioBuffer = Buffer.from(audioBase64, 'base64');
@@ -205,57 +209,101 @@ app.post('/transcribe-speakers', async (req, res) => {
     const tempPath = path.join(uploadsDir, `temp-${Date.now()}.m4a`);
     fs.writeFileSync(tempPath, audioBuffer);
 
-    // Upload to AssemblyAI
-    const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
-    console.log('Uploaded to AssemblyAI:', uploadUrl);
+    let rawText    = '';
+    let utterances = [];
 
-    // Delete temp file
-    fs.unlinkSync(tempPath);
+    if (mode === 'en') {
+      // ── ENGLISH MODE → AssemblyAI (best speaker detection) ──
+      console.log('Using AssemblyAI for English mode');
 
-    // Determine language code for AssemblyAI
-    // For mixed language modes — use English as base
-    // AssemblyAI handles Romanized Hindi/Marathi well with English model
-    let languageCode = 'en';
-    if (language === 'hi' && mode !== 'mumbai' && mode !== 'delhi') {
-      languageCode = 'hi';
+      const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
+      fs.unlinkSync(tempPath);
+      console.log('Uploaded to AssemblyAI:', uploadUrl);
+
+      const transcript = await aai.transcripts.transcribe({
+        audio:              uploadUrl,
+        speaker_labels:     true,
+        speakers_expected:  5,
+        language_detection: true,
+        format_text:        true,
+        punctuate:          true,
+        speech_models:      ['universal-2'],
+      });
+
+      console.log('AssemblyAI status:', transcript.status);
+      if (transcript.status === 'error') {
+        throw new Error('AssemblyAI error: ' + transcript.error);
+      }
+
+      rawText    = transcript.text || '';
+      utterances = transcript.utterances?.map(u => ({
+        speaker: 'Speaker ' + u.speaker,
+        text:    u.text,
+        start:   u.start,
+        end:     u.end,
+        words:   u.words || [],
+      })) || [];
+
+    } else {
+      // ── HINDI / MUMBAI MODE → Whisper (best for Indian languages) ──
+      console.log('Using Whisper for mode:', mode);
+
+      const whisperOptions = {
+        file:            fs.createReadStream(tempPath),
+        model:           'whisper-1',
+        response_format: 'verbose_json',
+      };
+
+      // Set prompt to guide Whisper for romanization
+      if (mode === 'hi') {
+        whisperOptions.language = 'hi';
+        whisperOptions.prompt   = 'Write in Roman script using English alphabet. Example: Mujhe jana hai tum chalogi';
+      }
+
+      if (mode === 'mumbai') {
+        // No language lock — let Whisper auto detect mixed language
+        whisperOptions.prompt = 'This is Mumbai speech mixing Hindi Marathi and English. Write in Roman script using English alphabet only. Example: Aaj meeting mein kya hua client satisfied tha pudhe kaam karte hai';
+      }
+
+      const whisperResult = await openai.audio.transcriptions.create(whisperOptions);
+      fs.unlinkSync(tempPath);
+
+      console.log('Whisper result:', whisperResult.text?.substring(0, 150));
+      rawText = whisperResult.text || '';
+
+      // Create utterances from Whisper segments
+      if (whisperResult.segments && whisperResult.segments.length > 0) {
+        // Group segments into speaker blocks (Whisper doesn't detect speakers)
+        utterances = whisperResult.segments.map((seg, i) => ({
+          speaker: 'Speaker A',
+          text:    seg.text.trim(),
+          start:   Math.round(seg.start * 1000),
+          end:     Math.round(seg.end   * 1000),
+          words:   [],
+        }));
+      } else {
+        utterances = [{
+          speaker: 'Speaker A',
+          text:    rawText,
+          start:   0,
+          end:     0,
+          words:   [],
+        }];
+      }
     }
 
-    // Transcribe with AssemblyAI
-    const transcript = await aai.transcripts.transcribe({
-      audio:             uploadUrl,
-      speaker_labels:    true,
-      speakers_expected: 5,
-      language_code:     languageCode,
-      format_text:       true,
-      punctuate:         true,
-      speech_models:     ['universal-2'],
-    });
+    console.log('Raw text preview:', rawText.substring(0, 150));
 
-    console.log('Transcript status:', transcript.status);
-    console.log('Transcript preview:', transcript.text?.substring(0, 150));
-
-    if (transcript.status === 'error') {
-      throw new Error('AssemblyAI error: ' + transcript.error);
-    }
-
-    // Format utterances
-    const utterances = transcript.utterances?.map(u => ({
-      speaker: 'Speaker ' + u.speaker,
-      text:    u.text,
-      start:   u.start,
-      end:     u.end,
-      words:   u.words,
-    })) || [];
-
-    // Translate if mode requires it
+    // ── TRANSLATE TO ENGLISH (Hindi/Mumbai modes) ──
     let englishText       = null;
     let englishUtterances = null;
 
-    if (mode === 'mumbai' || mode === 'delhi' || mode === 'hindi') {
-      console.log('Translating to English, mode:', mode);
+    if (mode === 'hi' || mode === 'mumbai') {
+      console.log('Translating to English...');
 
       // Translate full text
-      englishText = await translateToEnglish(transcript.text, mode);
+      englishText = await translateToEnglish(rawText, mode);
+      console.log('English text:', englishText?.substring(0, 150));
 
       // Translate each utterance
       if (utterances.length > 0) {
@@ -268,24 +316,37 @@ app.post('/transcribe-speakers', async (req, res) => {
       }
     }
 
-    // Generate summary in English
-    const summaryText = transcript.text
-      ? await generateSummary(englishText || transcript.text)
+    // ── GENERATE SUMMARY IN ENGLISH ──
+    const summaryInput = englishText || rawText;
+    const autoSummary  = summaryInput
+      ? await generateSummary(summaryInput)
       : null;
 
+    console.log('Summary generated:', autoSummary?.substring(0, 100));
+
     res.json({
-      success:           true,
-      text:              transcript.text,
-      englishText:       englishText,
-      utterances:        englishUtterances || utterances,
-      words:             transcript.words || [],
-      duration:          transcript.audio_duration,
-      autoSummary:       summaryText,
-      mode:              mode || 'en',
+      success:      true,
+      text:         rawText,
+      englishText:  englishText,
+      utterances:   englishUtterances || utterances,
+      words:        [],
+      duration:     null,
+      autoSummary:  autoSummary,
+      mode:         mode || 'en',
     });
 
   } catch (err) {
     console.error('/transcribe-speakers error:', err.message);
+    // Clean up temp file if exists
+    try {
+      const files = fs.readdirSync(uploadsDir);
+      files.filter(f => f.startsWith('temp-')).forEach(f => {
+        const fp = path.join(uploadsDir, f);
+        if (Date.now() - fs.statSync(fp).mtimeMs > 60000) {
+          fs.unlinkSync(fp);
+        }
+      });
+    } catch (e) {}
     res.status(500).json({ success: false, error: err.message });
   }
 });
