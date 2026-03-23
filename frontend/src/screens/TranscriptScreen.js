@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, SafeAreaView, Alert,
@@ -10,25 +10,49 @@ import { summarizeTranscript } from '../services/api';
 export default function TranscriptScreen({ route }) {
   const { transcript } = route.params;
 
-  const [summary,        setSummary]        = useState(null);
+  const [summary,        setSummary]        = useState(transcript.autoSummary || null);
   const [loadingSummary, setLoadingSummary] = useState(false);
-  const [expandedSpeaker, setExpandedSpeaker] = useState(null);
+  const [showOriginal,   setShowOriginal]   = useState(false);
+
+  const isMixedMode = transcript.mode === 'mumbai' ||
+                      transcript.mode === 'delhi'  ||
+                      transcript.mode === 'hi';
+
+  const getModeLabel = () => {
+    const labels = {
+      mumbai: '🏙️ Mumbai Mode',
+      delhi:  '🏛️ Delhi Mode',
+      hi:     '🇮🇳 Hindi Mode',
+      en:     '🇬🇧 English Mode',
+    };
+    return labels[transcript.mode] || '🇬🇧 English Mode';
+  };
 
   const copyToClipboard = async () => {
-    await Clipboard.setStringAsync(transcript.text);
+    const textToCopy = transcript.englishText || transcript.text;
+    await Clipboard.setStringAsync(textToCopy);
     Alert.alert('Copied!', 'Transcript copied to clipboard');
   };
 
   const shareTranscript = async () => {
     try {
-      const speakerText = transcript.utterances?.length > 0
-        ? transcript.utterances.map(u =>
-            `${u.speaker}:\n${u.text}`
-          ).join('\n\n')
-        : transcript.text;
+      let shareText = transcript.title + '\n\n';
+
+      if (isMixedMode && transcript.englishText) {
+        shareText += '--- English Translation ---\n';
+        shareText += transcript.englishText + '\n\n';
+        shareText += '--- Original ---\n';
+        shareText += transcript.text;
+      } else if (transcript.utterances?.length > 0) {
+        shareText += transcript.utterances.map(u =>
+          `${u.speaker}:\n${u.englishText || u.text}`
+        ).join('\n\n');
+      } else {
+        shareText += transcript.text;
+      }
 
       await Share.share({
-        message: transcript.title + '\n\n' + speakerText,
+        message: shareText,
         title:   transcript.title,
       });
     } catch (err) {
@@ -40,11 +64,12 @@ export default function TranscriptScreen({ route }) {
     setLoadingSummary(true);
     setSummary(null);
     try {
-      const result = await summarizeTranscript(transcript.text);
+      const textForSummary = transcript.englishText || transcript.text;
+      const result = await summarizeTranscript(textForSummary);
       if (result.success) {
         setSummary(result.summary);
       } else {
-        Alert.alert('Error', 'Could not generate summary. Please try again.');
+        Alert.alert('Error', 'Could not generate summary.');
       }
     } catch (err) {
       Alert.alert('Error', err.message);
@@ -91,14 +116,16 @@ export default function TranscriptScreen({ route }) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
 
-        {/* Title */}
+        {/* Title & Meta */}
         <Text style={styles.title}>{transcript.title}</Text>
-        <Text style={styles.meta}>
-          {transcript.wordCount} words  •  {formatDate(transcript.createdAt)}
-          {transcript.utterances?.length > 0 &&
-            `  •  ${transcript.utterances.length} speaker${transcript.utterances.length > 1 ? 's' : ''}`
-          }
-        </Text>
+        <View style={styles.metaRow}>
+          <Text style={styles.meta}>
+            {transcript.wordCount} words  •  {formatDate(transcript.createdAt)}
+          </Text>
+          <View style={styles.modeBadge}>
+            <Text style={styles.modeBadgeText}>{getModeLabel()}</Text>
+          </View>
+        </View>
 
         {/* Action Buttons */}
         <View style={styles.actions}>
@@ -128,11 +155,44 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* Summary */}
+        {/* Auto Summary (from recording) */}
         {summary && (
           <View style={styles.summaryBox}>
             <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
             <Text style={styles.summaryText}>{summary}</Text>
+          </View>
+        )}
+
+        {/* Mixed Mode — English Translation */}
+        {isMixedMode && transcript.englishText && (
+          <View style={styles.translationBox}>
+            <View style={styles.translationHeader}>
+              <Text style={styles.translationTitle}>
+                🇬🇧 English Translation
+              </Text>
+              <TouchableOpacity
+                style={styles.toggleBtn}
+                onPress={() => setShowOriginal(!showOriginal)}>
+                <Text style={styles.toggleBtnText}>
+                  {showOriginal ? 'Hide Original' : 'Show Original'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.translationText}>
+              {transcript.englishText}
+            </Text>
+
+            {/* Original Text */}
+            {showOriginal && transcript.originalText && (
+              <View style={styles.originalBox}>
+                <Text style={styles.originalLabel}>
+                  Original ({getModeLabel()}):
+                </Text>
+                <Text style={styles.originalText}>
+                  {transcript.originalText}
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -172,16 +232,53 @@ export default function TranscriptScreen({ route }) {
                     {formatTime(utterance.start)} — {formatTime(utterance.end)}
                   </Text>
                 </View>
-                <Text style={styles.utteranceText}>
-                  {utterance.text}
-                </Text>
+
+                {/* English text (primary) */}
+                {utterance.englishText && (
+                  <Text style={styles.utteranceText}>
+                    {utterance.englishText}
+                  </Text>
+                )}
+
+                {/* Original text (secondary) */}
+                {utterance.englishText && utterance.text !== utterance.englishText && (
+                  <Text style={styles.utteranceOriginal}>
+                    {utterance.text}
+                  </Text>
+                )}
+
+                {/* If no translation — show original */}
+                {!utterance.englishText && (
+                  <Text style={styles.utteranceText}>
+                    {utterance.text}
+                  </Text>
+                )}
               </View>
             ))}
           </View>
         ) : (
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>📝 Full Transcript</Text>
-            <Text style={styles.transcriptText}>{transcript.text}</Text>
+            <Text style={styles.transcriptText}>
+              {transcript.englishText || transcript.text}
+            </Text>
+            {isMixedMode && transcript.originalText && (
+              <TouchableOpacity
+                style={styles.toggleBtn}
+                onPress={() => setShowOriginal(!showOriginal)}>
+                <Text style={styles.toggleBtnText}>
+                  {showOriginal ? 'Hide Original' : 'Show Original'}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {showOriginal && transcript.originalText && (
+              <View style={styles.originalBox}>
+                <Text style={styles.originalLabel}>Original:</Text>
+                <Text style={styles.originalText}>
+                  {transcript.originalText}
+                </Text>
+              </View>
+            )}
           </View>
         )}
 
@@ -195,7 +292,13 @@ const styles = StyleSheet.create({
   scroll:           { padding: 20, paddingBottom: 40 },
   title:            { fontSize: 20, fontWeight: 'bold',
                       color: '#0D3B7A', marginBottom: 6 },
-  meta:             { fontSize: 12, color: '#888', marginBottom: 20 },
+  metaRow:          { flexDirection: 'row', justifyContent: 'space-between',
+                      alignItems: 'center', marginBottom: 16, flexWrap: 'wrap',
+                      gap: 8 },
+  meta:             { fontSize: 12, color: '#888' },
+  modeBadge:        { backgroundColor: '#E8F0FC', paddingHorizontal: 10,
+                      paddingVertical: 4, borderRadius: 12 },
+  modeBadgeText:    { fontSize: 11, color: '#1A56A0', fontWeight: '600' },
   actions:          { flexDirection: 'row', gap: 10, marginBottom: 16 },
   btn:              { flex: 1, backgroundColor: '#1A56A0', padding: 10,
                       borderRadius: 10, alignItems: 'center' },
@@ -213,6 +316,22 @@ const styles = StyleSheet.create({
   summaryTitle:     { fontSize: 14, fontWeight: 'bold',
                       color: '#1A7A4A', marginBottom: 10 },
   summaryText:      { fontSize: 13, color: '#333', lineHeight: 22 },
+  translationBox:   { backgroundColor: '#FFF9E6', padding: 16,
+                      borderRadius: 12, marginBottom: 16,
+                      borderLeftWidth: 4, borderLeftColor: '#E6A817' },
+  translationHeader:{ flexDirection: 'row', justifyContent: 'space-between',
+                      alignItems: 'center', marginBottom: 10 },
+  translationTitle: { fontSize: 14, fontWeight: 'bold', color: '#8B6A00' },
+  translationText:  { fontSize: 14, color: '#333', lineHeight: 24 },
+  originalBox:      { marginTop: 12, padding: 12, backgroundColor: '#F5F0E0',
+                      borderRadius: 8 },
+  originalLabel:    { fontSize: 11, fontWeight: '600', color: '#888',
+                      marginBottom: 6 },
+  originalText:     { fontSize: 13, color: '#666', lineHeight: 22,
+                      fontStyle: 'italic' },
+  toggleBtn:        { paddingHorizontal: 10, paddingVertical: 4,
+                      backgroundColor: '#E6A817', borderRadius: 8 },
+  toggleBtnText:    { fontSize: 11, color: '#fff', fontWeight: '600' },
   transcriptBox:    { backgroundColor: '#fff', padding: 16,
                       borderRadius: 12, marginBottom: 16 },
   transcriptLabel:  { fontSize: 14, fontWeight: 'bold',
@@ -223,8 +342,7 @@ const styles = StyleSheet.create({
   legendBadge:      { paddingHorizontal: 12, paddingVertical: 4,
                       borderRadius: 12 },
   legendText:       { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-  utteranceBox:     { borderRadius: 10, padding: 14,
-                      marginBottom: 12 },
+  utteranceBox:     { borderRadius: 10, padding: 14, marginBottom: 12 },
   speakerRow:       { flexDirection: 'row', alignItems: 'center',
                       gap: 10, marginBottom: 8 },
   speakerBadge:     { paddingHorizontal: 10, paddingVertical: 4,
@@ -232,4 +350,6 @@ const styles = StyleSheet.create({
   speakerBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' },
   utteranceTime:    { fontSize: 11, color: '#666' },
   utteranceText:    { fontSize: 15, color: '#333', lineHeight: 26 },
+  utteranceOriginal:{ fontSize: 12, color: '#888', lineHeight: 20,
+                      marginTop: 6, fontStyle: 'italic' },
 });

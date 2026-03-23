@@ -1,18 +1,45 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, Alert, ScrollView, ActivityIndicator
+  SafeAreaView, Alert, ActivityIndicator, ScrollView
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { transcribeWithSpeakers } from '../services/api';
 import { saveTranscript, createTranscriptObj } from '../utils/storage';
 
+const MODES = [
+  {
+    id:       'en',
+    label:    '🇬🇧 English',
+    language: 'en',
+    desc:     'English only'
+  },
+  {
+    id:       'hi',
+    label:    '🇮🇳 Hindi',
+    language: 'hi',
+    desc:     'Hindi → English'
+  },
+  {
+    id:       'mumbai',
+    label:    '🏙️ Mumbai',
+    language: 'en',
+    desc:     'Hindi + Marathi + English'
+  },
+  {
+    id:       'delhi',
+    label:    '🏛️ Delhi',
+    language: 'en',
+    desc:     'Hindi + Punjabi + English'
+  },
+];
+
 export default function RecordScreen({ navigation }) {
-  const [isRecording,    setIsRecording]    = useState(false);
-  const [statusText,     setStatusText]     = useState('Tap to start recording');
-  const [recordingTime,  setRecordingTime]  = useState(0);
-  const [isProcessing,   setIsProcessing]   = useState(false);
-  const [language,       setLanguage]       = useState('en');
+  const [isRecording,  setIsRecording]  = useState(false);
+  const [statusText,   setStatusText]   = useState('Tap to start recording');
+  const [recordingTime,setRecordingTime]= useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [mode,         setMode]         = useState('en');
 
   const recordingRef   = useRef(null);
   const timerRef       = useRef(null);
@@ -32,6 +59,8 @@ export default function RecordScreen({ navigation }) {
     const s = (seconds % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
   };
+
+  const selectedMode = MODES.find(m => m.id === mode) || MODES[0];
 
   const startRecording = async () => {
     try {
@@ -80,23 +109,29 @@ export default function RecordScreen({ navigation }) {
       if (uri) {
         const result = await transcribeWithSpeakers(
           uri,
-          language,
+          selectedMode.language,
+          mode,
           (message, percent) => {
             setStatusText(message + ' ' + percent + '%');
           }
         );
 
         if (result.success) {
-          const text = result.text ||
-            result.utterances?.map(u => u.text).join(' ') ||
+          const text = result.englishText ||
+            result.text ||
+            result.utterances?.map(u => u.englishText || u.text).join(' ') ||
             'Recording saved';
 
           const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
           const obj   = {
             ...createTranscriptObj(title, text, recordingTime),
-            utterances: result.utterances,
-            words:      result.words,
-            audioPath:  null,
+            utterances:  result.utterances,
+            words:       result.words,
+            audioPath:   null,
+            originalText: result.text,
+            englishText:  result.englishText,
+            autoSummary:  result.autoSummary,
+            mode:         mode,
           };
           await saveTranscript(obj);
           setStatusText('Transcript saved! ✅');
@@ -117,36 +152,74 @@ export default function RecordScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
 
-      <View style={styles.langRow}>
-        {['en', 'hi'].map(lang => (
+      {/* Mode Selector */}
+      <Text style={styles.sectionLabel}>Select Language Mode</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.modeScroll}
+        contentContainerStyle={styles.modeRow}>
+        {MODES.map(m => (
           <TouchableOpacity
-            key={lang}
-            style={[styles.langBtn, language === lang && styles.langBtnActive]}
-            onPress={() => !isRecording && setLanguage(lang)}>
-            <Text style={[styles.langText, language === lang && styles.langTextActive]}>
-              {lang === 'en' ? 'English' : 'हिंदी'}
+            key={m.id}
+            style={[styles.modeBtn, mode === m.id && styles.modeBtnActive]}
+            onPress={() => !isRecording && setMode(m.id)}>
+            <Text style={[styles.modeBtnLabel,
+              mode === m.id && styles.modeBtnLabelActive]}>
+              {m.label}
+            </Text>
+            <Text style={[styles.modeBtnDesc,
+              mode === m.id && styles.modeBtnDescActive]}>
+              {m.desc}
             </Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
+      {/* Timer */}
       <Text style={styles.timer}>{formatTime(recordingTime)}</Text>
 
+      {/* Status */}
       <View style={styles.statusRow}>
         {isProcessing && <ActivityIndicator color="#1A56A0" size="small" />}
         <Text style={styles.statusText}>{statusText}</Text>
       </View>
 
-      <View style={styles.emptyBox}>
-        <Text style={styles.emptyText}>
-          {isRecording
-            ? '🎙 Recording in progress...\nSpeak clearly for best results'
-            : isProcessing
-            ? '⏳ Processing your recording...\nThis may take 30-60 seconds'
-            : '🎙 Tap Start Recording to begin\nSpeaker detection powered by AI'}
-        </Text>
+      {/* Info Box */}
+      <View style={styles.infoBox}>
+        {isRecording ? (
+          <>
+            <Text style={styles.infoIcon}>🎙</Text>
+            <Text style={styles.infoText}>Recording in progress...</Text>
+            <Text style={styles.infoSubText}>
+              Speaking in {selectedMode.desc}
+            </Text>
+          </>
+        ) : isProcessing ? (
+          <>
+            <Text style={styles.infoIcon}>⚙️</Text>
+            <Text style={styles.infoText}>Processing your recording...</Text>
+            <Text style={styles.infoSubText}>
+              Detecting speakers + translating to English
+            </Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.infoIcon}>🎙</Text>
+            <Text style={styles.infoText}>Ready to record</Text>
+            <Text style={styles.infoSubText}>
+              Mode: {selectedMode.label}{'\n'}
+              {mode === 'mumbai' || mode === 'delhi'
+                ? '✨ Mixed language will be translated to English'
+                : mode === 'hi'
+                ? '✨ Hindi will be translated to English'
+                : '✨ English transcription with speaker detection'}
+            </Text>
+          </>
+        )}
       </View>
 
+      {/* Record Button */}
       <TouchableOpacity
         style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
         onPress={isRecording ? stopRecording : startRecording}
@@ -161,26 +234,37 @@ export default function RecordScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container:      { flex: 1, backgroundColor: '#F5F7FA', padding: 20 },
-  langRow:        { flexDirection: 'row', justifyContent: 'center',
-                    gap: 10, marginBottom: 20, marginTop: 10 },
-  langBtn:        { paddingHorizontal: 20, paddingVertical: 8,
-                    borderRadius: 20, borderWidth: 1.5,
-                    borderColor: '#1A56A0' },
-  langBtnActive:  { backgroundColor: '#1A56A0' },
-  langText:       { color: '#1A56A0', fontSize: 14, fontWeight: '600' },
-  langTextActive: { color: '#FFFFFF' },
-  timer:          { fontSize: 52, fontWeight: 'bold', color: '#0D3B7A',
-                    textAlign: 'center', marginBottom: 10 },
-  statusRow:      { flexDirection: 'row', alignItems: 'center',
-                    justifyContent: 'center', gap: 8, marginBottom: 8 },
-  statusText:     { fontSize: 14, color: '#666', textAlign: 'center' },
-  emptyBox:       { flex: 1, justifyContent: 'center',
-                    alignItems: 'center', marginBottom: 20 },
-  emptyText:      { fontSize: 15, color: '#aaa', textAlign: 'center',
-                    paddingHorizontal: 40, lineHeight: 26 },
-  recordBtn:      { backgroundColor: '#1A56A0', padding: 18,
-                    borderRadius: 14, alignItems: 'center' },
-  recordBtnActive:{ backgroundColor: '#C0392B' },
-  recordBtnText:  { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
+  container:          { flex: 1, backgroundColor: '#F5F7FA', padding: 20 },
+  sectionLabel:       { fontSize: 13, fontWeight: '600', color: '#666',
+                        marginBottom: 10, marginTop: 4 },
+  modeScroll:         { maxHeight: 90, marginBottom: 20 },
+  modeRow:            { gap: 10, paddingRight: 10 },
+  modeBtn:            { borderWidth: 1.5, borderColor: '#1A56A0',
+                        borderRadius: 12, paddingHorizontal: 14,
+                        paddingVertical: 8, minWidth: 110,
+                        alignItems: 'center' },
+  modeBtnActive:      { backgroundColor: '#1A56A0' },
+  modeBtnLabel:       { fontSize: 14, fontWeight: '700',
+                        color: '#1A56A0', marginBottom: 2 },
+  modeBtnLabelActive: { color: '#FFFFFF' },
+  modeBtnDesc:        { fontSize: 10, color: '#888', textAlign: 'center' },
+  modeBtnDescActive:  { color: '#CCE0FF' },
+  timer:              { fontSize: 52, fontWeight: 'bold', color: '#0D3B7A',
+                        textAlign: 'center', marginBottom: 10 },
+  statusRow:          { flexDirection: 'row', alignItems: 'center',
+                        justifyContent: 'center', gap: 8, marginBottom: 16 },
+  statusText:         { fontSize: 14, color: '#666', textAlign: 'center' },
+  infoBox:            { flex: 1, justifyContent: 'center',
+                        alignItems: 'center', marginBottom: 20,
+                        backgroundColor: '#FFFFFF', borderRadius: 16,
+                        padding: 24, borderWidth: 1, borderColor: '#DCE9F8' },
+  infoIcon:           { fontSize: 40, marginBottom: 12 },
+  infoText:           { fontSize: 16, fontWeight: '600', color: '#0D3B7A',
+                        marginBottom: 8, textAlign: 'center' },
+  infoSubText:        { fontSize: 13, color: '#888', textAlign: 'center',
+                        lineHeight: 22 },
+  recordBtn:          { backgroundColor: '#1A56A0', padding: 18,
+                        borderRadius: 14, alignItems: 'center' },
+  recordBtnActive:    { backgroundColor: '#C0392B' },
+  recordBtnText:      { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
 });

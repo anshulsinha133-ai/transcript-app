@@ -26,7 +26,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = ['audio/mpeg','audio/wav','audio/m4a','audio/mp4','audio/webm'];
     if (allowed.includes(file.mimetype)) cb(null, true);
@@ -35,13 +35,13 @@ const upload = multer({
 });
 
 app.get('/', (req, res) => {
-  res.send('Server is LIVE');
+  res.send('VoxNote Server is LIVE 🎙');
 });
 
 app.get('/health', (req, res) => {
   res.json({
     status:    'OK',
-    message:   'Transcript server is running',
+    message:   'VoxNote server is running',
     timestamp: new Date()
   });
 });
@@ -107,56 +107,181 @@ app.post('/summarize', async (req, res) => {
   }
 });
 
+// ─── HELPER: Translate mixed language transcript to English ───
+const translateToEnglish = async (text, mode) => {
+  try {
+    let systemPrompt = '';
+
+    if (mode === 'mumbai') {
+      systemPrompt = `You are a translator specializing in Mumbai's mixed language communication.
+People in Mumbai naturally mix Hindi, Marathi, and English in one sentence.
+The transcript will contain Romanized Hindi/Marathi words mixed with English.
+Your job is to:
+1. Translate everything to clean, natural English
+2. Keep names, places, and technical terms as-is
+3. Keep the meaning and tone exactly the same
+4. Do not add any extra words or explanations
+Just return the translated text only.`;
+    } else if (mode === 'delhi') {
+      systemPrompt = `You are a translator specializing in Delhi's mixed language communication.
+People in Delhi naturally mix Hindi, Punjabi, and English in one sentence.
+Translate everything to clean, natural English.
+Keep names, places, and technical terms as-is.
+Just return the translated text only.`;
+    } else if (mode === 'hindi') {
+      systemPrompt = `You are a Hindi to English translator.
+Translate the following Hindi text (written in Roman script) to clean English.
+Keep names, places, and technical terms as-is.
+Just return the translated text only.`;
+    } else {
+      return null;
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: text }
+      ],
+      max_tokens: 2000,
+    });
+
+    return completion.choices[0].message.content;
+  } catch (err) {
+    console.error('Translation error:', err.message);
+    return null;
+  }
+};
+
+// ─── HELPER: Generate English summary ───
+const generateSummary = async (text) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role:    'system',
+          content: `You are a meeting summarizer for Indian businesses.
+The transcript may contain mixed Hindi, Marathi, and English.
+Always respond in clear English.
+Extract:
+1) One-line summary
+2) Key points discussed
+3) Action items with owners (if mentioned)
+4) Decisions made
+Be concise and professional.`
+        },
+        {
+          role:    'user',
+          content: 'Summarize this transcript:\n\n' + text
+        }
+      ],
+      max_tokens: 600,
+    });
+
+    return completion.choices[0].message.content;
+  } catch (err) {
+    console.error('Summary error:', err.message);
+    return null;
+  }
+};
+
+// ─── MAIN ROUTE: Transcribe with speakers + language mode ───
 app.post('/transcribe-speakers', async (req, res) => {
   try {
-    const { audioBase64, language } = req.body;
+    const { audioBase64, language, mode } = req.body;
 
     if (!audioBase64) {
       return res.status(400).json({ success: false, error: 'No audio data received' });
     }
 
-    console.log('Received audio base64, length:', audioBase64.length);
+    console.log('Received audio, length:', audioBase64.length, 'mode:', mode);
 
-    // Convert base64 to Buffer — Node.js native, works perfectly
+    // Convert base64 to Buffer
     const audioBuffer = Buffer.from(audioBase64, 'base64');
-    console.log('Audio buffer size:', audioBuffer.length, 'bytes');
+    console.log('Buffer size:', audioBuffer.length, 'bytes');
 
-    // Save temporarily to disk
+    // Save temp file
     const tempPath = path.join(uploadsDir, `temp-${Date.now()}.m4a`);
     fs.writeFileSync(tempPath, audioBuffer);
-    console.log('Saved temp file:', tempPath);
 
-    // Upload to AssemblyAI using official SDK
+    // Upload to AssemblyAI
     const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
     console.log('Uploaded to AssemblyAI:', uploadUrl);
 
     // Delete temp file
     fs.unlinkSync(tempPath);
 
-    // Transcribe with speaker detection
+    // Determine language code for AssemblyAI
+    // For mixed language modes — use English as base
+    // AssemblyAI handles Romanized Hindi/Marathi well with English model
+    let languageCode = 'en';
+    if (language === 'hi' && mode !== 'mumbai' && mode !== 'delhi') {
+      languageCode = 'hi';
+    }
+
+    // Transcribe with AssemblyAI
     const transcript = await aai.transcripts.transcribe({
       audio:             uploadUrl,
       speaker_labels:    true,
       speakers_expected: 5,
-      language_code:     language || 'en',
+      language_code:     languageCode,
       format_text:       true,
       punctuate:         true,
       speech_models:     ['universal-2'],
     });
 
     console.log('Transcript status:', transcript.status);
-    console.log('Transcript text preview:', transcript.text?.substring(0, 100));
+    console.log('Transcript preview:', transcript.text?.substring(0, 150));
 
     if (transcript.status === 'error') {
       throw new Error('AssemblyAI error: ' + transcript.error);
     }
 
+    // Format utterances
+    const utterances = transcript.utterances?.map(u => ({
+      speaker: 'Speaker ' + u.speaker,
+      text:    u.text,
+      start:   u.start,
+      end:     u.end,
+      words:   u.words,
+    })) || [];
+
+    // Translate if mode requires it
+    let englishText       = null;
+    let englishUtterances = null;
+
+    if (mode === 'mumbai' || mode === 'delhi' || mode === 'hindi') {
+      console.log('Translating to English, mode:', mode);
+
+      // Translate full text
+      englishText = await translateToEnglish(transcript.text, mode);
+
+      // Translate each utterance
+      if (utterances.length > 0) {
+        englishUtterances = await Promise.all(
+          utterances.map(async (u) => ({
+            ...u,
+            englishText: await translateToEnglish(u.text, mode),
+          }))
+        );
+      }
+    }
+
+    // Generate summary in English
+    const summaryText = transcript.text
+      ? await generateSummary(englishText || transcript.text)
+      : null;
+
     res.json({
-      success:    true,
-      text:       transcript.text,
-      utterances: transcript.utterances || [],
-      words:      transcript.words      || [],
-      duration:   transcript.audio_duration,
+      success:           true,
+      text:              transcript.text,
+      englishText:       englishText,
+      utterances:        englishUtterances || utterances,
+      words:             transcript.words || [],
+      duration:          transcript.audio_duration,
+      autoSummary:       summaryText,
+      mode:              mode || 'en',
     });
 
   } catch (err) {
@@ -166,5 +291,5 @@ app.post('/transcribe-speakers', async (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`VoxNote server running on port ${PORT}`);
 });
