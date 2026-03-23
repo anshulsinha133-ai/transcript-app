@@ -7,9 +7,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { getAllTranscripts, deleteTranscript } from '../utils/storage';
 
 export default function HomeScreen({ navigation }) {
-  const [transcripts,  setTranscripts]  = useState([]);
-  const [searchQuery,  setSearchQuery]  = useState('');
-  const [filtered,     setFiltered]     = useState([]);
+  const [transcripts, setTranscripts] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filtered,    setFiltered]    = useState([]);
 
   useFocusEffect(useCallback(() => {
     const loadTranscripts = async () => {
@@ -37,12 +37,14 @@ export default function HomeScreen({ navigation }) {
   const handleDelete = (id) => {
     Alert.alert('Delete Transcript', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
           await deleteTranscript(id);
           const updated = transcripts.filter(t => t.id !== id);
           setTranscripts(updated);
           setFiltered(updated);
-      }}
+        }
+      }
     ]);
   };
 
@@ -54,16 +56,27 @@ export default function HomeScreen({ navigation }) {
   const renderItem = ({ item }) => (
     <TouchableOpacity
       style={styles.card}
-      onPress={() => navigation.navigate('Transcript', { transcript: item })}
-      onLongPress={() => handleDelete(item.id)}>
+      onPress={() => navigation.navigate('Transcript', { transcript: item })}>
       <View style={styles.cardHeader}>
         <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
-        <Text style={styles.cardDate}>{formatDate(item.createdAt)}</Text>
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={() => handleDelete(item.id)}>
+          <Text style={styles.deleteBtnText}>🗑</Text>
+        </TouchableOpacity>
       </View>
+      <Text style={styles.cardDate}>{formatDate(item.createdAt)}</Text>
       <Text style={styles.cardPreview} numberOfLines={2}>{item.text}</Text>
       <View style={styles.cardFooter}>
         <Text style={styles.cardMeta}>{item.wordCount} words</Text>
-        {item.duration && <Text style={styles.cardMeta}>{Math.round(item.duration)}s</Text>}
+        {item.duration && (
+          <Text style={styles.cardMeta}>{Math.round(item.duration)}s</Text>
+        )}
+        <Text style={styles.cardMeta}>
+          {item.utterances?.length > 0
+            ? `${item.utterances.length} speakers`
+            : 'Single speaker'}
+        </Text>
       </View>
     </TouchableOpacity>
   );
@@ -72,8 +85,10 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0D3B7A" />
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Transcript AI</Text>
-        <Text style={styles.headerSub}>{transcripts.length} recording{transcripts.length !== 1 ? 's' : ''}</Text>
+        <Text style={styles.headerTitle}>VoxNote</Text>
+        <Text style={styles.headerSub}>
+          {transcripts.length} recording{transcripts.length !== 1 ? 's' : ''}
+        </Text>
       </View>
 
       <View style={styles.searchContainer}>
@@ -85,28 +100,38 @@ export default function HomeScreen({ navigation }) {
           onChangeText={handleSearch}
         />
         {searchQuery.length > 0 && (
-          <TouchableOpacity style={styles.clearBtn} onPress={() => handleSearch('')}>
+          <TouchableOpacity
+            style={styles.clearBtn}
+            onPress={() => handleSearch('')}>
             <Text style={styles.clearBtnText}>✕</Text>
           </TouchableOpacity>
         )}
       </View>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Record')}>
-          <Text style={styles.btnText}>Record</Text>
+        <TouchableOpacity
+          style={styles.btn}
+          onPress={() => navigation.navigate('Record')}>
+          <Text style={styles.btnText}>🎙 Record</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={() => navigation.navigate('Upload')}>
-          <Text style={[styles.btnText, styles.btnTextSecondary]}>Upload File</Text>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnSecondary]}
+          onPress={() => navigation.navigate('Upload')}>
+          <Text style={[styles.btnText, styles.btnTextSecondary]}>📁 Upload</Text>
         </TouchableOpacity>
       </View>
 
       {filtered.length === 0 && searchQuery.length > 0
         ? <View style={styles.empty}>
-            <Text style={styles.emptyText}>No transcripts found{'\n'}for "{searchQuery}"</Text>
+            <Text style={styles.emptyText}>
+              No transcripts found{'\n'}for "{searchQuery}"
+            </Text>
           </View>
         : filtered.length === 0
         ? <View style={styles.empty}>
-            <Text style={styles.emptyText}>No transcripts yet.{'\n'}Tap Record to start!</Text>
+            <Text style={styles.emptyText}>
+              No transcripts yet.{'\n'}Tap Record to start!
+            </Text>
           </View>
         : <FlatList
             data={filtered}
@@ -143,13 +168,15 @@ const styles = StyleSheet.create({
   card:             { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16,
                       marginBottom: 12, elevation: 3 },
   cardHeader:       { flexDirection: 'row', justifyContent: 'space-between',
-                      alignItems: 'flex-start', marginBottom: 8 },
+                      alignItems: 'flex-start', marginBottom: 4 },
   cardTitle:        { fontSize: 16, fontWeight: 'bold', color: '#0D3B7A',
                       flex: 1, marginRight: 8 },
-  cardDate:         { fontSize: 11, color: '#888888' },
+  cardDate:         { fontSize: 11, color: '#888888', marginBottom: 8 },
   cardPreview:      { fontSize: 13, color: '#666666', lineHeight: 20, marginBottom: 8 },
   cardFooter:       { flexDirection: 'row', gap: 16 },
   cardMeta:         { fontSize: 11, color: '#1A56A0', fontWeight: '600' },
   empty:            { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyText:        { fontSize: 16, color: '#888888', textAlign: 'center', lineHeight: 28 },
+  deleteBtn:        { padding: 6, marginLeft: 8 },
+  deleteBtnText:    { fontSize: 18 },
 });

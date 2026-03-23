@@ -4,7 +4,6 @@ import {
   StyleSheet, SafeAreaView, Alert,
   ActivityIndicator, Share
 } from 'react-native';
-import { Audio } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import { summarizeTranscript } from '../services/api';
 
@@ -13,94 +12,7 @@ export default function TranscriptScreen({ route }) {
 
   const [summary,        setSummary]        = useState(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
-  const [sound,          setSound]          = useState(null);
-  const [isPlaying,      setIsPlaying]      = useState(false);
-  const [position,       setPosition]       = useState(0);
-  const [duration,       setDuration]       = useState(0);
-  const [activeWord,     setActiveWord]     = useState(null);
-  const soundRef = useRef(null);
-
-  useEffect(() => {
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
-      }
-    };
-  }, []);
-
-  const loadAudio = async () => {
-    try {
-      if (!transcript.audioPath) {
-        Alert.alert('No audio', 'Audio file not available for this transcript');
-        return;
-      }
-
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: transcript.audioPath },
-        { shouldPlay: false },
-        onPlaybackStatusUpdate
-      );
-
-      soundRef.current = newSound;
-      setSound(newSound);
-    } catch (err) {
-      Alert.alert('Error', 'Could not load audio: ' + err.message);
-    }
-  };
-
-  const onPlaybackStatusUpdate = (status) => {
-    if (status.isLoaded) {
-      setPosition(status.positionMillis);
-      setDuration(status.durationMillis);
-      setIsPlaying(status.isPlaying);
-
-      if (transcript.words) {
-        const currentWord = transcript.words.find(
-          w => status.positionMillis >= w.start &&
-               status.positionMillis <= w.end
-        );
-        if (currentWord) setActiveWord(currentWord.text);
-      }
-
-      if (status.didJustFinish) {
-        setIsPlaying(false);
-        setPosition(0);
-      }
-    }
-  };
-
-  const togglePlayPause = async () => {
-    if (!soundRef.current) {
-      await loadAudio();
-      return;
-    }
-    if (isPlaying) {
-      await soundRef.current.pauseAsync();
-    } else {
-      await soundRef.current.playAsync();
-    }
-  };
-
-  const seekForward = async () => {
-    if (!soundRef.current) return;
-    const newPos = Math.min(position + 5000, duration);
-    await soundRef.current.setPositionAsync(newPos);
-  };
-
-  const seekBackward = async () => {
-    if (!soundRef.current) return;
-    const newPos = Math.max(position - 5000, 0);
-    await soundRef.current.setPositionAsync(newPos);
-  };
-
-  const formatTime = (ms) => {
-    const totalSeconds = Math.floor(ms / 1000);
-    const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-    const s = (totalSeconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  const progressPercent = duration > 0 ? (position / duration) * 100 : 0;
+  const [expandedSpeaker, setExpandedSpeaker] = useState(null);
 
   const copyToClipboard = async () => {
     await Clipboard.setStringAsync(transcript.text);
@@ -109,8 +21,14 @@ export default function TranscriptScreen({ route }) {
 
   const shareTranscript = async () => {
     try {
+      const speakerText = transcript.utterances?.length > 0
+        ? transcript.utterances.map(u =>
+            `${u.speaker}:\n${u.text}`
+          ).join('\n\n')
+        : transcript.text;
+
       await Share.share({
-        message: transcript.title + '\n\n' + transcript.text,
+        message: transcript.title + '\n\n' + speakerText,
         title:   transcript.title,
       });
     } catch (err) {
@@ -139,79 +57,110 @@ export default function TranscriptScreen({ route }) {
     hour: '2-digit', minute: '2-digit'
   });
 
+  const formatTime = (ms) => {
+    if (!ms) return '0:00';
+    const totalSeconds = Math.floor(ms / 1000);
+    const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const s = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
   const getSpeakerColor = (speaker) => {
     const colors = {
       'Speaker A': '#1A56A0',
       'Speaker B': '#1A7A4A',
       'Speaker C': '#C85A00',
       'Speaker D': '#8B1AAF',
+      'Speaker E': '#C0392B',
     };
     return colors[speaker] || '#1A56A0';
+  };
+
+  const getSpeakerBg = (speaker) => {
+    const colors = {
+      'Speaker A': '#E8F0FC',
+      'Speaker B': '#E8F5EE',
+      'Speaker C': '#FEF3E8',
+      'Speaker D': '#F3E8FE',
+      'Speaker E': '#FDE8E8',
+    };
+    return colors[speaker] || '#E8F0FC';
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
 
+        {/* Title */}
         <Text style={styles.title}>{transcript.title}</Text>
         <Text style={styles.meta}>
-          {transcript.wordCount} words | {formatDate(transcript.createdAt)}
+          {transcript.wordCount} words  •  {formatDate(transcript.createdAt)}
+          {transcript.utterances?.length > 0 &&
+            `  •  ${transcript.utterances.length} speaker${transcript.utterances.length > 1 ? 's' : ''}`
+          }
         </Text>
 
-        {transcript.audioPath && (
-          <View style={styles.playerBox}>
-            <Text style={styles.playerTitle}>Audio Player</Text>
-            <View style={styles.progressBar}>
-              <View style={[styles.progressFill, { width: progressPercent + '%' }]} />
-            </View>
-            <View style={styles.timeRow}>
-              <Text style={styles.timeText}>{formatTime(position)}</Text>
-              <Text style={styles.timeText}>{formatTime(duration)}</Text>
-            </View>
-            <View style={styles.controls}>
-              <TouchableOpacity style={styles.seekBtn} onPress={seekBackward}>
-                <Text style={styles.seekBtnText}>-5s</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.playBtn} onPress={togglePlayPause}>
-                <Text style={styles.playBtnText}>
-                  {isPlaying ? '⏸' : '▶'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.seekBtn} onPress={seekForward}>
-                <Text style={styles.seekBtnText}>+5s</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
+        {/* Action Buttons */}
         <View style={styles.actions}>
           <TouchableOpacity style={styles.btn} onPress={copyToClipboard}>
+            <Text style={styles.btnIcon}>📋</Text>
             <Text style={styles.btnText}>Copy</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnGreen]} onPress={getSummary}>
-            <Text style={styles.btnText}>AI Summary</Text>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnGreen]}
+            onPress={getSummary}>
+            <Text style={styles.btnIcon}>🤖</Text>
+            <Text style={styles.btnText}>Summary</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnOrange]} onPress={shareTranscript}>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnOrange]}
+            onPress={shareTranscript}>
+            <Text style={styles.btnIcon}>📤</Text>
             <Text style={styles.btnText}>Share</Text>
           </TouchableOpacity>
         </View>
 
+        {/* Loading Summary */}
         {loadingSummary && (
-          <ActivityIndicator color="#1A56A0" style={{ margin: 16 }} />
+          <View style={styles.loadingBox}>
+            <ActivityIndicator color="#1A56A0" />
+            <Text style={styles.loadingText}>Generating AI summary...</Text>
+          </View>
         )}
 
+        {/* Summary */}
         {summary && (
           <View style={styles.summaryBox}>
-            <Text style={styles.summaryTitle}>AI Summary</Text>
+            <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
             <Text style={styles.summaryText}>{summary}</Text>
           </View>
         )}
 
+        {/* Speaker Transcript */}
         {transcript.utterances && transcript.utterances.length > 0 ? (
           <View style={styles.transcriptBox}>
-            <Text style={styles.transcriptLabel}>Speaker Transcript</Text>
+            <Text style={styles.transcriptLabel}>
+              🎙 Speaker Transcript
+            </Text>
+
+            {/* Speaker Legend */}
+            <View style={styles.legendRow}>
+              {[...new Set(transcript.utterances.map(u => u.speaker))].map(speaker => (
+                <View
+                  key={speaker}
+                  style={[styles.legendBadge,
+                    { backgroundColor: getSpeakerColor(speaker) }]}>
+                  <Text style={styles.legendText}>{speaker}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Utterances */}
             {transcript.utterances.map((utterance, index) => (
-              <View key={index} style={styles.utteranceBox}>
+              <View
+                key={index}
+                style={[styles.utteranceBox,
+                  { backgroundColor: getSpeakerBg(utterance.speaker) }]}>
                 <View style={styles.speakerRow}>
                   <View style={[styles.speakerBadge,
                     { backgroundColor: getSpeakerColor(utterance.speaker) }]}>
@@ -220,27 +169,18 @@ export default function TranscriptScreen({ route }) {
                     </Text>
                   </View>
                   <Text style={styles.utteranceTime}>
-                    {formatTime(utterance.start)} - {formatTime(utterance.end)}
+                    {formatTime(utterance.start)} — {formatTime(utterance.end)}
                   </Text>
                 </View>
                 <Text style={styles.utteranceText}>
-                  {utterance.words ? utterance.words.map((word, wi) => (
-                    <Text
-                      key={wi}
-                      style={[
-                        styles.wordText,
-                        activeWord === word.text && styles.wordActive
-                      ]}>
-                      {word.text + ' '}
-                    </Text>
-                  )) : utterance.text}
+                  {utterance.text}
                 </Text>
               </View>
             ))}
           </View>
         ) : (
           <View style={styles.transcriptBox}>
-            <Text style={styles.transcriptLabel}>Full Transcript</Text>
+            <Text style={styles.transcriptLabel}>📝 Full Transcript</Text>
             <Text style={styles.transcriptText}>{transcript.text}</Text>
           </View>
         )}
@@ -252,57 +192,44 @@ export default function TranscriptScreen({ route }) {
 
 const styles = StyleSheet.create({
   container:        { flex: 1, backgroundColor: '#F5F7FA' },
-  scroll:           { padding: 20 },
+  scroll:           { padding: 20, paddingBottom: 40 },
   title:            { fontSize: 20, fontWeight: 'bold',
                       color: '#0D3B7A', marginBottom: 6 },
-  meta:             { fontSize: 12, color: '#888', marginBottom: 16 },
-  playerBox:        { backgroundColor: '#FFFFFF', borderRadius: 12,
-                      padding: 16, marginBottom: 16,
-                      borderWidth: 1, borderColor: '#DCE9F8' },
-  playerTitle:      { fontSize: 13, fontWeight: 'bold',
-                      color: '#0D3B7A', marginBottom: 12 },
-  progressBar:      { height: 6, backgroundColor: '#E8EEF7',
-                      borderRadius: 3, marginBottom: 8 },
-  progressFill:     { height: 6, backgroundColor: '#1A56A0',
-                      borderRadius: 3 },
-  timeRow:          { flexDirection: 'row', justifyContent: 'space-between',
-                      marginBottom: 12 },
-  timeText:         { fontSize: 12, color: '#888' },
-  controls:         { flexDirection: 'row', justifyContent: 'center',
-                      alignItems: 'center', gap: 20 },
-  seekBtn:          { backgroundColor: '#E8EEF7', paddingHorizontal: 16,
-                      paddingVertical: 10, borderRadius: 8 },
-  seekBtnText:      { color: '#1A56A0', fontWeight: 'bold', fontSize: 14 },
-  playBtn:          { backgroundColor: '#1A56A0', width: 56, height: 56,
-                      borderRadius: 28, justifyContent: 'center',
-                      alignItems: 'center' },
-  playBtnText:      { color: '#FFFFFF', fontSize: 22 },
-  actions:          { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  btn:              { flex: 1, backgroundColor: '#1A56A0', padding: 12,
-                      borderRadius: 8, alignItems: 'center' },
+  meta:             { fontSize: 12, color: '#888', marginBottom: 20 },
+  actions:          { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  btn:              { flex: 1, backgroundColor: '#1A56A0', padding: 10,
+                      borderRadius: 10, alignItems: 'center' },
   btnGreen:         { backgroundColor: '#1A7A4A' },
   btnOrange:        { backgroundColor: '#C85A00' },
-  btnText:          { color: '#fff', fontWeight: 'bold' },
+  btnIcon:          { fontSize: 18, marginBottom: 2 },
+  btnText:          { color: '#fff', fontWeight: 'bold', fontSize: 12 },
+  loadingBox:       { flexDirection: 'row', alignItems: 'center',
+                      gap: 10, padding: 16, backgroundColor: '#EFF4FF',
+                      borderRadius: 10, marginBottom: 16 },
+  loadingText:      { color: '#1A56A0', fontSize: 13 },
   summaryBox:       { backgroundColor: '#D6F0E2', padding: 16,
-                      borderRadius: 10, marginBottom: 16,
+                      borderRadius: 12, marginBottom: 16,
                       borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
   summaryTitle:     { fontSize: 14, fontWeight: 'bold',
-                      color: '#1A7A4A', marginBottom: 8 },
+                      color: '#1A7A4A', marginBottom: 10 },
   summaryText:      { fontSize: 13, color: '#333', lineHeight: 22 },
-  transcriptBox:    { backgroundColor: '#fff', padding: 16, borderRadius: 10 },
-  transcriptLabel:  { fontSize: 13, fontWeight: 'bold',
-                      color: '#0D3B7A', marginBottom: 10 },
-  transcriptText:   { fontSize: 15, color: '#333', lineHeight: 26 },
-  utteranceBox:     { marginBottom: 16, paddingBottom: 16,
-                      borderBottomWidth: 1, borderBottomColor: '#E8EEF7' },
+  transcriptBox:    { backgroundColor: '#fff', padding: 16,
+                      borderRadius: 12, marginBottom: 16 },
+  transcriptLabel:  { fontSize: 14, fontWeight: 'bold',
+                      color: '#0D3B7A', marginBottom: 12 },
+  transcriptText:   { fontSize: 15, color: '#333', lineHeight: 28 },
+  legendRow:        { flexDirection: 'row', gap: 8,
+                      marginBottom: 16, flexWrap: 'wrap' },
+  legendBadge:      { paddingHorizontal: 12, paddingVertical: 4,
+                      borderRadius: 12 },
+  legendText:       { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  utteranceBox:     { borderRadius: 10, padding: 14,
+                      marginBottom: 12 },
   speakerRow:       { flexDirection: 'row', alignItems: 'center',
                       gap: 10, marginBottom: 8 },
   speakerBadge:     { paddingHorizontal: 10, paddingVertical: 4,
                       borderRadius: 12 },
   speakerBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' },
-  utteranceTime:    { fontSize: 11, color: '#888' },
+  utteranceTime:    { fontSize: 11, color: '#666' },
   utteranceText:    { fontSize: 15, color: '#333', lineHeight: 26 },
-  wordText:         { fontSize: 15, color: '#333' },
-  wordActive:       { backgroundColor: '#FFE066', color: '#0D3B7A',
-                      fontWeight: 'bold' },
 });
