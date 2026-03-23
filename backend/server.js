@@ -4,26 +4,24 @@ const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
 const OpenAI  = require('openai');
+const { AssemblyAI } = require('assemblyai');
 require('dotenv').config();
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
+const app    = express();
+const PORT   = process.env.PORT || 3000;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
 
-app.use(cors({
-  origin: "*",
-}));
-app.use(express.json());
+app.use(cors({ origin: '*' }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// Ensure uploads folder exists
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
-// Multer setup
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+  filename:    (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
 });
 
 const upload = multer({
@@ -36,21 +34,18 @@ const upload = multer({
   }
 });
 
-// ✅ ROOT ROUTE (for testing)
-app.get("/", (req, res) => {
-  res.send("Server is LIVE");
+app.get('/', (req, res) => {
+  res.send('Server is LIVE');
 });
 
-// ✅ HEALTH ROUTE
 app.get('/health', (req, res) => {
   res.json({
-    status: 'OK',
-    message: 'Transcript server is running',
+    status:    'OK',
+    message:   'Transcript server is running',
     timestamp: new Date()
   });
 });
 
-// ✅ TRANSCRIBE
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No audio file received' });
 
@@ -59,48 +54,42 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 
   try {
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
-      model: 'whisper-1',
+      file:            fs.createReadStream(filePath),
+      model:           'whisper-1',
       response_format: 'verbose_json',
     });
 
     fs.unlinkSync(filePath);
 
     res.json({
-      success: true,
+      success:    true,
       transcript: transcription.text,
-      duration: transcription.duration,
-      segments: transcription.segments,
-      language: transcription.language,
+      duration:   transcription.duration,
+      segments:   transcription.segments,
+      language:   transcription.language,
     });
 
   } catch (err) {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
-    console.error("Transcription error:", err);
-
+    console.error('Transcription error:', err);
     res.status(500).json({ error: 'Transcription failed: ' + err.message });
   }
 });
 
-// ✅ SUMMARIZE
 app.post('/summarize', async (req, res) => {
   const { transcript } = req.body;
-
-  if (!transcript) {
-    return res.status(400).json({ error: 'No transcript provided' });
-  }
+  if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
 
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
-          role: 'system',
+          role:    'system',
           content: 'You are a meeting summarizer. Extract: 1) Key points 2) Action items 3) One-line summary'
         },
         {
-          role: 'user',
+          role:    'user',
           content: 'Summarize this transcript:\n\n' + transcript
         }
       ],
@@ -113,12 +102,69 @@ app.post('/summarize', async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Summary error:", err);
+    console.error('Summary error:', err);
     res.status(500).json({ error: 'Summary failed: ' + err.message });
   }
 });
 
-// ✅ SINGLE LISTEN (ONLY ONE — VERY IMPORTANT)
-app.listen(PORT, "0.0.0.0", () => {
+app.post('/transcribe-speakers', async (req, res) => {
+  try {
+    const { audioBase64, language } = req.body;
+
+    if (!audioBase64) {
+      return res.status(400).json({ success: false, error: 'No audio data received' });
+    }
+
+    console.log('Received audio base64, length:', audioBase64.length);
+
+    // Convert base64 to Buffer — Node.js native, works perfectly
+    const audioBuffer = Buffer.from(audioBase64, 'base64');
+    console.log('Audio buffer size:', audioBuffer.length, 'bytes');
+
+    // Save temporarily to disk
+    const tempPath = path.join(uploadsDir, `temp-${Date.now()}.m4a`);
+    fs.writeFileSync(tempPath, audioBuffer);
+    console.log('Saved temp file:', tempPath);
+
+    // Upload to AssemblyAI using official SDK
+    const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
+    console.log('Uploaded to AssemblyAI:', uploadUrl);
+
+    // Delete temp file
+    fs.unlinkSync(tempPath);
+
+    // Transcribe with speaker detection
+    const transcript = await aai.transcripts.transcribe({
+      audio:             uploadUrl,
+      speaker_labels:    true,
+      speakers_expected: 2,
+      language_code:     language || 'en',
+      format_text:       true,
+      punctuate:         true,
+      speech_model:      'universal-2',
+    });
+
+    console.log('Transcript status:', transcript.status);
+    console.log('Transcript text preview:', transcript.text?.substring(0, 100));
+
+    if (transcript.status === 'error') {
+      throw new Error('AssemblyAI error: ' + transcript.error);
+    }
+
+    res.json({
+      success:    true,
+      text:       transcript.text,
+      utterances: transcript.utterances || [],
+      words:      transcript.words      || [],
+      duration:   transcript.audio_duration,
+    });
+
+  } catch (err) {
+    console.error('/transcribe-speakers error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });

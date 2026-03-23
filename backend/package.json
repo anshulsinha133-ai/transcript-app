@@ -6,6 +6,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "assemblyai": "^4.28.0",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.22.1",
