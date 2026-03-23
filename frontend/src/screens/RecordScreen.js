@@ -150,17 +150,11 @@ export default function RecordScreen({ navigation }) {
           }
         );
 
-        // Show debug alert so we can see exactly what came back
-        Alert.alert(
-          'Debug Result',
-          `Success: ${result.success}\nError: ${result.error || 'none'}\nText: ${result.text?.substring(0, 100) || 'empty'}\nUtterances: ${result.utterances?.length || 0}`
-        );
-
         if (result.success) {
-          const text = result.text || 
-            result.utterances?.map(u => u.text).join(' ') || 
+          const text = result.text ||
+            result.utterances?.map(u => u.text).join(' ') ||
             'Recording saved';
-          
+
           const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
           const obj   = {
             ...createTranscriptObj(title, text, recordingTime),
@@ -273,4 +267,4 @@ const styles = StyleSheet.create({
                      borderRadius: 14, alignItems: 'center' },
   recordBtnActive: { backgroundColor: '#C0392B' },
   recordBtnText:   { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-});
+});d
