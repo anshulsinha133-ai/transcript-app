@@ -14,19 +14,8 @@ export default function TranscriptScreen({ route }) {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [showOriginal,   setShowOriginal]   = useState(false);
 
-  const isMixedMode = transcript.mode === 'mumbai' ||
-                      transcript.mode === 'delhi'  ||
-                      transcript.mode === 'hi';
-
-  const getModeLabel = () => {
-    const labels = {
-      mumbai: '🏙️ Mumbai Mode',
-      delhi:  '🏛️ Delhi Mode',
-      hi:     '🇮🇳 Hindi Mode',
-      en:     '🇬🇧 English Mode',
-    };
-    return labels[transcript.mode] || '🇬🇧 English Mode';
-  };
+  const hasTranslation = transcript.englishText &&
+    transcript.englishText !== transcript.text;
 
   const copyToClipboard = async () => {
     const textToCopy = transcript.englishText || transcript.text;
@@ -38,17 +27,16 @@ export default function TranscriptScreen({ route }) {
     try {
       let shareText = transcript.title + '\n\n';
 
-      if (isMixedMode && transcript.englishText) {
-        shareText += '--- English Translation ---\n';
-        shareText += transcript.englishText + '\n\n';
-        shareText += '--- Original ---\n';
-        shareText += transcript.text;
-      } else if (transcript.utterances?.length > 0) {
+      if (transcript.utterances?.length > 0) {
         shareText += transcript.utterances.map(u =>
           `${u.speaker}:\n${u.englishText || u.text}`
         ).join('\n\n');
       } else {
-        shareText += transcript.text;
+        shareText += transcript.englishText || transcript.text;
+      }
+
+      if (summary) {
+        shareText += '\n\n--- AI Summary ---\n' + summary;
       }
 
       await Share.share({
@@ -112,6 +100,14 @@ export default function TranscriptScreen({ route }) {
     return colors[speaker] || '#E8F0FC';
   };
 
+  const getLangBadge = () => {
+    const lang = transcript.detectedLang || 'en';
+    if (lang === 'en') return '🇬🇧 English';
+    if (lang === 'hi') return '🇮🇳 Hindi';
+    if (lang === 'mr') return '🏙️ Marathi';
+    return '🌐 Auto';
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -122,8 +118,8 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.meta}>
             {transcript.wordCount} words  •  {formatDate(transcript.createdAt)}
           </Text>
-          <View style={styles.modeBadge}>
-            <Text style={styles.modeBadgeText}>{getModeLabel()}</Text>
+          <View style={styles.langBadge}>
+            <Text style={styles.langBadgeText}>{getLangBadge()}</Text>
           </View>
         </View>
 
@@ -155,7 +151,7 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* Auto Summary (from recording) */}
+        {/* Summary */}
         {summary && (
           <View style={styles.summaryBox}>
             <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
@@ -163,8 +159,8 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* Mixed Mode — English Translation */}
-        {isMixedMode && transcript.englishText && (
+        {/* English Translation Box */}
+        {hasTranslation && (
           <View style={styles.translationBox}>
             <View style={styles.translationHeader}>
               <Text style={styles.translationTitle}>
@@ -181,12 +177,10 @@ export default function TranscriptScreen({ route }) {
             <Text style={styles.translationText}>
               {transcript.englishText}
             </Text>
-
-            {/* Original Text */}
             {showOriginal && transcript.originalText && (
               <View style={styles.originalBox}>
                 <Text style={styles.originalLabel}>
-                  Original ({getModeLabel()}):
+                  Original (Roman script):
                 </Text>
                 <Text style={styles.originalText}>
                   {transcript.originalText}
@@ -233,23 +227,15 @@ export default function TranscriptScreen({ route }) {
                   </Text>
                 </View>
 
-                {/* English text (primary) */}
-                {utterance.englishText && (
-                  <Text style={styles.utteranceText}>
-                    {utterance.englishText}
-                  </Text>
-                )}
+                {/* Show English if available, else original */}
+                <Text style={styles.utteranceText}>
+                  {utterance.englishText || utterance.text}
+                </Text>
 
-                {/* Original text (secondary) */}
-                {utterance.englishText && utterance.text !== utterance.englishText && (
+                {/* Show original as italic below if translated */}
+                {utterance.englishText &&
+                 utterance.englishText !== utterance.text && (
                   <Text style={styles.utteranceOriginal}>
-                    {utterance.text}
-                  </Text>
-                )}
-
-                {/* If no translation — show original */}
-                {!utterance.englishText && (
-                  <Text style={styles.utteranceText}>
                     {utterance.text}
                   </Text>
                 )}
@@ -262,22 +248,26 @@ export default function TranscriptScreen({ route }) {
             <Text style={styles.transcriptText}>
               {transcript.englishText || transcript.text}
             </Text>
-            {isMixedMode && transcript.originalText && (
-              <TouchableOpacity
-                style={styles.toggleBtn}
-                onPress={() => setShowOriginal(!showOriginal)}>
-                <Text style={styles.toggleBtnText}>
-                  {showOriginal ? 'Hide Original' : 'Show Original'}
-                </Text>
-              </TouchableOpacity>
-            )}
-            {showOriginal && transcript.originalText && (
-              <View style={styles.originalBox}>
-                <Text style={styles.originalLabel}>Original:</Text>
-                <Text style={styles.originalText}>
-                  {transcript.originalText}
-                </Text>
-              </View>
+            {hasTranslation && (
+              <>
+                <TouchableOpacity
+                  style={[styles.toggleBtn, { marginTop: 12 }]}
+                  onPress={() => setShowOriginal(!showOriginal)}>
+                  <Text style={styles.toggleBtnText}>
+                    {showOriginal ? 'Hide Original' : 'Show Original'}
+                  </Text>
+                </TouchableOpacity>
+                {showOriginal && (
+                  <View style={styles.originalBox}>
+                    <Text style={styles.originalLabel}>
+                      Original (Roman script):
+                    </Text>
+                    <Text style={styles.originalText}>
+                      {transcript.originalText || transcript.text}
+                    </Text>
+                  </View>
+                )}
+              </>
             )}
           </View>
         )}
@@ -293,12 +283,12 @@ const styles = StyleSheet.create({
   title:            { fontSize: 20, fontWeight: 'bold',
                       color: '#0D3B7A', marginBottom: 6 },
   metaRow:          { flexDirection: 'row', justifyContent: 'space-between',
-                      alignItems: 'center', marginBottom: 16, flexWrap: 'wrap',
-                      gap: 8 },
+                      alignItems: 'center', marginBottom: 16,
+                      flexWrap: 'wrap', gap: 8 },
   meta:             { fontSize: 12, color: '#888' },
-  modeBadge:        { backgroundColor: '#E8F0FC', paddingHorizontal: 10,
+  langBadge:        { backgroundColor: '#E8F0FC', paddingHorizontal: 10,
                       paddingVertical: 4, borderRadius: 12 },
-  modeBadgeText:    { fontSize: 11, color: '#1A56A0', fontWeight: '600' },
+  langBadgeText:    { fontSize: 11, color: '#1A56A0', fontWeight: '600' },
   actions:          { flexDirection: 'row', gap: 10, marginBottom: 16 },
   btn:              { flex: 1, backgroundColor: '#1A56A0', padding: 10,
                       borderRadius: 10, alignItems: 'center' },
@@ -323,12 +313,12 @@ const styles = StyleSheet.create({
                       alignItems: 'center', marginBottom: 10 },
   translationTitle: { fontSize: 14, fontWeight: 'bold', color: '#8B6A00' },
   translationText:  { fontSize: 14, color: '#333', lineHeight: 24 },
-  originalBox:      { marginTop: 12, padding: 12, backgroundColor: '#F5F0E0',
-                      borderRadius: 8 },
-  originalLabel:    { fontSize: 11, fontWeight: '600', color: '#888',
-                      marginBottom: 6 },
-  originalText:     { fontSize: 13, color: '#666', lineHeight: 22,
-                      fontStyle: 'italic' },
+  originalBox:      { marginTop: 12, padding: 12,
+                      backgroundColor: '#F5F0E0', borderRadius: 8 },
+  originalLabel:    { fontSize: 11, fontWeight: '600',
+                      color: '#888', marginBottom: 6 },
+  originalText:     { fontSize: 13, color: '#666',
+                      lineHeight: 22, fontStyle: 'italic' },
   toggleBtn:        { paddingHorizontal: 10, paddingVertical: 4,
                       backgroundColor: '#E6A817', borderRadius: 8 },
   toggleBtnText:    { fontSize: 11, color: '#fff', fontWeight: '600' },
