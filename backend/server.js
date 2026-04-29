@@ -181,10 +181,10 @@ app.post('/transcribe-speakers', async (req, res) => {
 
     // ✅ FIXED TRANSCRIPTION CONFIG
     const transcript = await aai.transcripts.transcribe({
-      audio: uploadUrl,
-      speaker_labels: true,
-      speech_model: 'universal'   // ✅ FIX HERE
-    });
+  audio: uploadUrl,
+  speaker_labels: true,
+  speech_models: ['universal']   // ✅ CORRECT FIX
+});
 
     if (transcript.status === 'error') {
       throw new Error(transcript.error);
