@@ -36,7 +36,7 @@ export const transcribeWithSpeakers = async (uri, onProgress = null) => {
   try {
     if (onProgress) onProgress('Preparing audio...', 10);
 
-    // ✅ FormData — no base64, no memory crash
+    // ✅ FormData streaming — no base64, no memory crash
     const formData = new FormData();
     formData.append('audio', {
       uri:  uri,
@@ -46,7 +46,7 @@ export const transcribeWithSpeakers = async (uri, onProgress = null) => {
 
     if (onProgress) onProgress('Uploading audio...', 20);
 
-    // ✅ NO Content-Type header — React Native sets it with boundary
+    // ✅ NO Content-Type header — React Native sets it automatically with boundary
     const response = await fetch(`${RENDER_URL}/transcribe-speakers`, {
       method: 'POST',
       body:   formData,
