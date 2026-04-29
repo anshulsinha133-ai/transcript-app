@@ -9,6 +9,7 @@ require('dotenv').config();
 
 const app    = express();
 const PORT   = process.env.PORT || 3000;
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
 
@@ -16,6 +17,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
+// ─── FILE STORAGE ───
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
@@ -34,41 +36,82 @@ const upload = multer({
   }
 });
 
+// ─── BASIC ROUTES ───
 app.get('/', (req, res) => {
   res.send('VoxNote Server is LIVE 🎙');
 });
 
 app.get('/health', (req, res) => {
   res.json({
-    status:    'OK',
-    message:   'VoxNote server is running',
+    status: 'OK',
+    message: 'VoxNote server is running',
     timestamp: new Date()
   });
 });
 
+// ─── LOGIN ROUTES (NEW) ───
+
+// TEST ROUTE (open in browser)
+app.get('/api/login', (req, res) => {
+  res.send("Login route working ✅");
+});
+
+// LOGIN
+app.post('/api/login', (req, res) => {
+  const { email, password } = req.body;
+
+  console.log("Login attempt:", email);
+
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: "Email and password required"
+    });
+  }
+
+  return res.json({
+    success: true,
+    message: "Login successful",
+    token: "demo-token"
+  });
+});
+
+// REGISTER
+app.post('/api/register', (req, res) => {
+  const { email, password } = req.body;
+
+  console.log("Register attempt:", email);
+
+  return res.json({
+    success: true,
+    message: "User registered (demo)"
+  });
+});
+
+// ─── SUMMARIZE ───
 app.post('/summarize', async (req, res) => {
   const { transcript } = req.body;
-  if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
+
+  if (!transcript) {
+    return res.status(400).json({ error: 'No transcript provided' });
+  }
 
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
-          role:    'system',
+          role: 'system',
           content: `You are a meeting summarizer for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
 Always respond in clear English only.
-Extract:
-1) One-line summary
-2) Key points discussed
-3) Action items (if any)
-4) Decisions made (if any)
-Be concise and professional.`
+Give:
+1) Summary
+2) Key points
+3) Action items`
         },
         {
-          role:    'user',
-          content: 'Summarize this transcript:\n\n' + transcript
+          role: 'user',
+          content: transcript
         }
       ],
       max_tokens: 600,
@@ -80,78 +123,50 @@ Be concise and professional.`
     });
 
   } catch (err) {
-    console.error('Summary error:', err);
-    res.status(500).json({ error: 'Summary failed: ' + err.message });
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ─── HELPER: Translate Roman script Hindi/Marathi to English ───
+// ─── TRANSLATE ───
 const translateToEnglish = async (text) => {
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        {
-          role:    'system',
-          content: `You are a translator for Indian languages.
-The text may contain Hindi, Marathi or a mix with English written in Roman script.
-Examples:
-- "Mujhe jana hai office" → "I need to go to office"
-- "Aaj meeting acchi thi, client satisfied aahe" → "Today's meeting was good, client is satisfied"
-- "Yeh project important hai, deadline Friday hai" → "This project is important, deadline is Friday"
-Rules:
-1. Translate everything to clean natural English
-2. Keep names, places, company names as-is
-3. Keep technical terms as-is
-4. If text is already in English — return it as-is
-5. Return ONLY the translated text, nothing else`
-        },
+        { role: 'system', content: 'Translate to English' },
         { role: 'user', content: text }
-      ],
-      max_tokens: 2000,
+      ]
     });
 
     return completion.choices[0].message.content;
+
   } catch (err) {
-    console.error('Translation error:', err.message);
+    console.error(err);
     return null;
   }
 };
 
-// ─── HELPER: Generate English summary ───
+// ─── SUMMARY HELPER ───
 const generateSummary = async (text) => {
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        {
-          role:    'system',
-          content: `You are a meeting summarizer for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
-Always respond in clear English only.
-Extract:
-1) One-line summary
-2) Key points discussed
-3) Action items (if any)
-4) Decisions made (if any)
-Be concise and professional.`
-        },
-        {
-          role:    'user',
-          content: 'Summarize this:\n\n' + text
-        }
-      ],
-      max_tokens: 600,
+        { role: 'system', content: 'Summarize clearly' },
+        { role: 'user', content: text }
+      ]
     });
 
     return completion.choices[0].message.content;
+
   } catch (err) {
-    console.error('Summary generation error:', err.message);
+    console.error(err);
     return null;
   }
 };
 
-// ─── MAIN ROUTE: Smart auto-detect with Universal-3 Pro ───
+// ─── TRANSCRIBE ───
 app.post('/transcribe-speakers', async (req, res) => {
   const tempPath = path.join(uploadsDir, `temp-${Date.now()}.m4a`);
 
@@ -159,117 +174,45 @@ app.post('/transcribe-speakers', async (req, res) => {
     const { audioBase64 } = req.body;
 
     if (!audioBase64) {
-      return res.status(400).json({ success: false, error: 'No audio data received' });
+      return res.status(400).json({ success: false, error: 'No audio data' });
     }
 
-    console.log('Audio received, length:', audioBase64.length);
+    const buffer = Buffer.from(audioBase64, 'base64');
+    fs.writeFileSync(tempPath, buffer);
 
-    // Convert base64 to Buffer
-    const audioBuffer = Buffer.from(audioBase64, 'base64');
-    console.log('Buffer size:', audioBuffer.length, 'bytes');
-
-    // Save temp file
-    fs.writeFileSync(tempPath, audioBuffer);
-
-    // ── STEP 1: Upload to AssemblyAI ──
-    console.log('Step 1: Uploading to AssemblyAI...');
     const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
     fs.unlinkSync(tempPath);
-    console.log('Uploaded:', uploadUrl);
 
-    // ── STEP 2: Transcribe with Universal-3 Pro ──
-    // Universal-3 Pro handles Hindi + Marathi + English automatically
-    // Returns Roman script for Indian languages
-    console.log('Step 2: Transcribing with Universal-3 Pro...');
     const transcript = await aai.transcripts.transcribe({
-      audio:              uploadUrl,
-      speaker_labels:     true,
-      speakers_expected:  5,
+      audio: uploadUrl,
+      speaker_labels: true,
       language_detection: true,
-      format_text:        true,
-      punctuate:          true,
-      speech_models:      ['universal-3-pro', 'universal-2'],
+      speech_models: ['universal-3-pro'],
     });
 
-    console.log('Transcript status:', transcript.status);
-    console.log('Detected language:', transcript.language_code);
-    console.log('Text preview:', transcript.text?.substring(0, 150));
-
     if (transcript.status === 'error') {
-      throw new Error('AssemblyAI error: ' + transcript.error);
+      throw new Error(transcript.error);
     }
 
-    const rawText       = transcript.text || '';
-    const detectedLang  = transcript.language_code || 'en';
-    const speakers      = [...new Set(
-      (transcript.utterances || []).map(u => u.speaker)
-    )];
+    const text = transcript.text || '';
 
-    console.log('Speakers detected:', speakers);
-
-    // Format utterances
-    const utterances = transcript.utterances?.map(u => ({
-      speaker: 'Speaker ' + u.speaker,
-      text:    u.text,
-      start:   u.start,
-      end:     u.end,
-      words:   u.words || [],
-    })) || [];
-
-    // ── STEP 3: Translate if Indian language detected ──
-    let englishText       = null;
-    let englishUtterances = null;
-
-    const isIndianLang = detectedLang !== 'en' ||
-      /\b(hai|hain|tha|thi|mein|ka|ki|ko|aaj|kal|kya|nahi|hum|aap|tum|mere|tera|yeh|woh|karo|karenge|chahiye|aahe|pudhe|amhi|nahin|matlab|theek|achha|bilkul)\b/i.test(rawText);
-
-    if (isIndianLang) {
-      console.log('Step 3: Indian language detected — translating...');
-
-      englishText = await translateToEnglish(rawText);
-      console.log('English text:', englishText?.substring(0, 150));
-
-      if (utterances.length > 0) {
-        englishUtterances = await Promise.all(
-          utterances.map(async (u) => ({
-            ...u,
-            englishText: await translateToEnglish(u.text),
-          }))
-        );
-      }
-    }
-
-    // ── STEP 4: Generate summary ──
-    console.log('Step 4: Generating summary...');
-    const summaryInput = englishText || rawText;
-    const autoSummary  = summaryInput
-      ? await generateSummary(summaryInput)
-      : null;
-
-    console.log('Summary:', autoSummary?.substring(0, 100));
-    console.log('Processing complete!');
+    const englishText = await translateToEnglish(text);
+    const summary     = await generateSummary(englishText || text);
 
     res.json({
-      success:      true,
-      text:         rawText,
-      englishText:  englishText  || null,
-      utterances:   englishUtterances || utterances,
-      words:        transcript.words  || [],
-      duration:     transcript.audio_duration || null,
-      detectedLang: detectedLang,
-      autoSummary:  autoSummary  || null,
-      speakers:     speakers.length,
+      success: true,
+      text,
+      englishText,
+      summary
     });
 
   } catch (err) {
-    console.error('/transcribe-speakers error:', err.message);
-    try {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    } catch (e) {}
-    res.status(500).json({ success: false, error: err.message });
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
+// ─── START SERVER ───
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`VoxNote server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
