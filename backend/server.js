@@ -57,8 +57,6 @@ app.get('/api/login', (req, res) => {
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
 
-  console.log("Login attempt:", email);
-
   if (!email || !password) {
     return res.status(400).json({
       success: false,
@@ -74,10 +72,6 @@ app.post('/api/login', (req, res) => {
 });
 
 app.post('/api/register', (req, res) => {
-  const { email, password } = req.body;
-
-  console.log("Register attempt:", email);
-
   return res.json({
     success: true,
     message: "User registered (demo)"
@@ -98,9 +92,7 @@ app.post('/summarize', async (req, res) => {
       messages: [
         {
           role: 'system',
-          content: `You are a meeting summarizer for Indian businesses.
-Always respond in clear English only.
-Give:
+          content: `You are a meeting summarizer. Give:
 1) Summary
 2) Key points
 3) Action items`
@@ -162,7 +154,7 @@ const generateSummary = async (text) => {
   }
 };
 
-// ─── TRANSCRIBE ───
+// ─── TRANSCRIBE (UPGRADED WITH SPEAKERS) ───
 app.post('/transcribe-speakers', async (req, res) => {
   const tempPath = path.join(uploadsDir, `temp-${Date.now()}.m4a`);
 
@@ -179,12 +171,12 @@ app.post('/transcribe-speakers', async (req, res) => {
     const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
     fs.unlinkSync(tempPath);
 
-    // ✅ FIXED TRANSCRIPTION CONFIG
+    // ✅ FINAL TRANSCRIPTION CONFIG
     const transcript = await aai.transcripts.transcribe({
-  audio: uploadUrl,
-  speaker_labels: true,
-  speech_models: ['universal']   // ✅ CORRECT FIX
-});
+      audio: uploadUrl,
+      speaker_labels: true,
+      speech_models: ['universal']
+    });
 
     if (transcript.status === 'error') {
       throw new Error(transcript.error);
@@ -192,14 +184,25 @@ app.post('/transcribe-speakers', async (req, res) => {
 
     const text = transcript.text || '';
 
+    // ✅ NEW: SPEAKER-WISE DATA
+    const utterances = transcript.utterances || [];
+
+    const speakers = utterances.map((u) => ({
+      speaker: `Speaker ${u.speaker}`,
+      text: u.text,
+      start: u.start,
+      end: u.end
+    }));
+
     const englishText = await translateToEnglish(text);
     const summary     = await generateSummary(englishText || text);
 
     res.json({
       success: true,
-      text,
+      fullTranscript: text,
       englishText,
-      summary
+      summary,
+      speakers   // ✅ NEW OUTPUT
     });
 
   } catch (err) {
