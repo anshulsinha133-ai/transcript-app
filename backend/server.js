@@ -49,14 +49,11 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ─── LOGIN ROUTES (NEW) ───
-
-// TEST ROUTE (open in browser)
+// ─── LOGIN ROUTES ───
 app.get('/api/login', (req, res) => {
   res.send("Login route working ✅");
 });
 
-// LOGIN
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body;
 
@@ -76,7 +73,6 @@ app.post('/api/login', (req, res) => {
   });
 });
 
-// REGISTER
 app.post('/api/register', (req, res) => {
   const { email, password } = req.body;
 
@@ -123,7 +119,7 @@ Give:
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("SUMMARY ERROR:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -142,7 +138,7 @@ const translateToEnglish = async (text) => {
     return completion.choices[0].message.content;
 
   } catch (err) {
-    console.error(err);
+    console.error("TRANSLATION ERROR:", err.message);
     return null;
   }
 };
@@ -161,7 +157,7 @@ const generateSummary = async (text) => {
     return completion.choices[0].message.content;
 
   } catch (err) {
-    console.error(err);
+    console.error("SUMMARY HELPER ERROR:", err.message);
     return null;
   }
 };
@@ -183,11 +179,11 @@ app.post('/transcribe-speakers', async (req, res) => {
     const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
     fs.unlinkSync(tempPath);
 
+    // ✅ FIXED TRANSCRIPTION CONFIG
     const transcript = await aai.transcripts.transcribe({
       audio: uploadUrl,
       speaker_labels: true,
-      language_detection: true,
-      speech_models: ['universal-3-pro'],
+      speech_model: 'universal'   // ✅ FIX HERE
     });
 
     if (transcript.status === 'error') {
@@ -207,7 +203,7 @@ app.post('/transcribe-speakers', async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error("TRANSCRIPTION ERROR:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
