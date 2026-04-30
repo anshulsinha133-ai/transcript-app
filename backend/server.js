@@ -1,89 +1,340 @@
-import axios from 'axios';
+const express    = require('express');
+const multer     = require('multer');
+const cors       = require('cors');
+const path       = require('path');
+const fs         = require('fs');
+const OpenAI     = require('openai');
+const { AssemblyAI } = require('assemblyai');
+require('dotenv').config();
 
-const OPENAI_API_KEY = '';
-const RENDER_URL = 'https://transcript-app-lbpe.onrender.com';
+const app    = express();
+const PORT   = process.env.PORT || 3000;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
 
-export const checkServerHealth = async () => {
+app.use(cors({ origin: '*' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename:    (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => { cb(null, true); }
+});
+
+app.get('/', (req, res) => {
+  res.send('VoxNote Server is LIVE 🎙');
+});
+
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', message: 'VoxNote server is running', timestamp: new Date() });
+});
+
+app.post('/api/login', (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password required' });
+  return res.json({ success: true, message: 'Login successful', token: 'demo-token' });
+});
+
+app.post('/api/register', (req, res) => {
+  return res.json({ success: true, message: 'User registered (demo)' });
+});
+
+app.post('/summarize', async (req, res) => {
+  const { transcript } = req.body;
+  if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
   try {
-    const response = await axios.get(`${RENDER_URL}/health`, { timeout: 60000 });
-    return response.data;
-  } catch (err) {
-    throw new Error('Cannot reach server.');
-  }
-};
-
-export const summarizeTranscript = async (transcript) => {
-  try {
-    const response = await axios.post(
-      `${RENDER_URL}/summarize`,
-      { transcript },
-      {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 60000,
-      }
-    );
-    return {
-      success: true,
-      summary: response.data.summary
-    };
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a meeting summarizer for Indian businesses.
+The transcript may contain Roman script Hindi, Marathi or English.
+Always respond in clear English only.
+Extract:
+1) One-line summary
+2) Key points discussed
+3) Action items (if any)
+4) Decisions made (if any)
+Be concise and professional.`
+        },
+        { role: 'user', content: 'Summarize this transcript:\n\n' + transcript }
+      ],
+      max_tokens: 600,
+    });
+    res.json({ success: true, summary: completion.choices[0].message.content });
   } catch (err) {
     console.error('Summary error:', err);
-    throw new Error('Summary failed: ' + err.message);
+    res.status(500).json({ error: 'Summary failed: ' + err.message });
   }
-};
+});
 
-export const transcribeWithSpeakers = async (uri, onProgress = null) => {
+// ─── ACTION 1: NEW /chat ROUTE ───
+// Allows users to ask questions across one or all transcripts
+// Example: "What did we discuss about budget?" or "Who mentioned the deadline?"
+app.post('/chat', async (req, res) => {
+  const { question, transcripts } = req.body;
+
+  if (!question) {
+    return res.status(400).json({ success: false, error: 'No question provided' });
+  }
+  if (!transcripts || transcripts.length === 0) {
+    return res.status(400).json({ success: false, error: 'No transcripts provided' });
+  }
+
   try {
-    if (onProgress) onProgress('Preparing audio...', 10);
+    console.log('Chat question:', question);
+    console.log('Number of transcripts:', transcripts.length);
 
-    // ✅ FormData streaming — no base64, no memory crash
-    const formData = new FormData();
-    formData.append('audio', {
-      uri:  uri,
-      type: 'audio/m4a',
-      name: 'recording.m4a',
+    // Build context from all transcripts
+    const transcriptContext = transcripts.map((t, i) => {
+      const date = new Date(t.createdAt).toLocaleDateString('en-IN');
+      const speakers = t.utterances && t.utterances.length > 0
+        ? t.utterances.map(u => `${u.speaker}: ${u.englishText || u.text}`).join('\n')
+        : (t.englishText || t.text);
+
+      return `--- Recording ${i + 1}: "${t.title}" (${date}) ---\n${speakers}`;
+    }).join('\n\n');
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are VoxNote AI, an intelligent assistant for Indian businesses.
+You have access to the user's meeting transcripts and recordings.
+The transcripts may contain English, Hindi, or Marathi conversations.
+
+Your job is to:
+1. Answer questions about what was discussed in meetings
+2. Find specific information across multiple recordings
+3. Identify who said what and when
+4. Extract insights, action items, or decisions mentioned
+
+Rules:
+- Always answer in clear English
+- Be specific — mention which recording the information came from
+- If information is not in the transcripts, say "I couldn't find that in your recordings"
+- Keep answers concise and helpful
+- For Indian names and terms, keep them as-is`
+        },
+        {
+          role: 'user',
+          content: `Here are my meeting transcripts:\n\n${transcriptContext}\n\n---\n\nMy question: ${question}`
+        }
+      ],
+      max_tokens: 800,
     });
 
-    if (onProgress) onProgress('Uploading audio...', 20);
+    const answer = completion.choices[0].message.content;
+    console.log('Chat answer generated');
 
-    // ✅ NO Content-Type header — React Native sets it automatically with boundary
-    const response = await fetch(`${RENDER_URL}/transcribe-speakers`, {
-      method: 'POST',
-      body:   formData,
+    res.json({
+      success:  true,
+      answer:   answer,
+      question: question,
     });
-
-    if (onProgress) onProgress('Processing speakers...', 60);
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Server error ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-
-    if (!data.success) {
-      throw new Error(data.error || 'Transcription failed');
-    }
-
-    if (onProgress) onProgress('Done!', 100);
-
-    return {
-      success:      true,
-      text:         data.text,
-      englishText:  data.englishText  || null,
-      utterances:   data.utterances   || [],
-      words:        data.words        || [],
-      duration:     data.duration,
-      autoSummary:  data.autoSummary  || null,
-      actionItems:  data.actionItems  || [],
-      detectedLang: data.detectedLang || 'en',
-    };
 
   } catch (err) {
-    console.error('transcribeWithSpeakers error:', err.message);
-    return {
-      success: false,
-      error:   err.message || 'Transcription failed',
-    };
+    console.error('/chat error:', err.message);
+    res.status(500).json({ success: false, error: 'Chat failed: ' + err.message });
+  }
+});
+
+const translateToEnglish = async (text) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a translator for Indian languages.
+The text may contain Hindi, Marathi or a mix with English written in Roman script.
+Rules:
+1. Translate everything to clean natural English
+2. Keep names, places, company names as-is
+3. Keep technical terms as-is
+4. If text is already in English — return it as-is
+5. Return ONLY the translated text, nothing else`
+        },
+        { role: 'user', content: text }
+      ],
+      max_tokens: 2000,
+    });
+    return completion.choices[0].message.content;
+  } catch (err) {
+    console.error('Translation error:', err.message);
+    return null;
   }
 };
+
+const generateSummary = async (text) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a meeting summarizer for Indian businesses.
+Always respond in clear English only.
+Extract:
+1) One-line summary
+2) Key points discussed
+3) Action items (if any)
+4) Decisions made (if any)
+Be concise and professional.`
+        },
+        { role: 'user', content: 'Summarize this:\n\n' + text }
+      ],
+      max_tokens: 600,
+    });
+    return completion.choices[0].message.content;
+  } catch (err) {
+    console.error('Summary generation error:', err.message);
+    return null;
+  }
+};
+
+const extractActionItems = async (text) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are an assistant that extracts action items from meeting transcripts.
+Rules:
+1. Each action item must start with a verb (Call, Send, Review, Schedule, etc.)
+2. Include who is responsible if mentioned
+3. Include deadline if mentioned
+4. Return ONLY a JSON array like this:
+[
+  {"task": "Send proposal to client", "owner": "Anshul", "deadline": "Friday"},
+  {"task": "Review Q3 report", "owner": "Team", "deadline": null}
+]
+5. If no action items found, return empty array: []
+6. Return ONLY the JSON array, nothing else`
+        },
+        { role: 'user', content: 'Extract action items:\n\n' + text }
+      ],
+      max_tokens: 500,
+    });
+    const raw    = completion.choices[0].message.content.trim();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.error('Action items error:', err.message);
+    return [];
+  }
+};
+
+app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
+  const tempPath = req.file ? req.file.path : null;
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No audio file received' });
+    }
+
+    console.log('Audio file received:', req.file.originalname);
+    console.log('File size:', req.file.size, 'bytes');
+
+    console.log('Step 1: Uploading to AssemblyAI...');
+    const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
+    fs.unlinkSync(tempPath);
+    console.log('Uploaded:', uploadUrl);
+
+    console.log('Step 2: Transcribing...');
+    const transcript = await aai.transcripts.transcribe({
+      audio:              uploadUrl,
+      speaker_labels:     true,
+      speakers_expected:  5,
+      language_detection: true,
+      format_text:        true,
+      punctuate:          true,
+      speech_models:      ['universal-3-pro', 'universal-2'],
+    });
+
+    console.log('Transcript status:', transcript.status);
+    console.log('Detected language:', transcript.language_code);
+
+    if (transcript.status === 'error') {
+      throw new Error('AssemblyAI error: ' + transcript.error);
+    }
+
+    const rawText      = transcript.text || '';
+    const detectedLang = transcript.language_code || 'en';
+    const speakerList  = [...new Set((transcript.utterances || []).map(u => u.speaker))];
+
+    console.log('Speakers detected:', speakerList);
+
+    const utterances = transcript.utterances?.map(u => ({
+      speaker: 'User ' + u.speaker,
+      text:    u.text,
+      start:   u.start,
+      end:     u.end,
+      words:   u.words || [],
+    })) || [];
+
+    let englishText       = null;
+    let englishUtterances = null;
+
+    const isIndianLang = detectedLang !== 'en' ||
+      /\b(hai|hain|tha|thi|mein|ka|ki|ko|aaj|kal|kya|nahi|hum|aap|tum|mere|tera|yeh|woh|karo|karenge|chahiye|aahe|pudhe|amhi|nahin|matlab|theek|achha|bilkul)\b/i.test(rawText);
+
+    if (isIndianLang) {
+      console.log('Step 3: Translating to English...');
+      englishText = await translateToEnglish(rawText);
+      if (utterances.length > 0) {
+        englishUtterances = await Promise.all(
+          utterances.map(async (u) => ({
+            ...u,
+            englishText: await translateToEnglish(u.text),
+          }))
+        );
+      }
+    } else {
+      englishText       = rawText;
+      englishUtterances = utterances.map(u => ({ ...u, englishText: u.text }));
+    }
+
+    console.log('Step 4: Generating summary...');
+    const summaryInput = englishText || rawText;
+    const autoSummary  = summaryInput ? await generateSummary(summaryInput) : null;
+
+    console.log('Step 5: Extracting action items...');
+    const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
+
+    console.log('Processing complete!');
+
+    res.json({
+      success:      true,
+      text:         rawText,
+      englishText:  englishText  || null,
+      utterances:   englishUtterances || utterances,
+      words:        transcript.words  || [],
+      duration:     transcript.audio_duration || null,
+      detectedLang: detectedLang,
+      autoSummary:  autoSummary  || null,
+      actionItems:  actionItems  || [],
+      speakers:     speakerList.length,
+    });
+
+  } catch (err) {
+    console.error('/transcribe-speakers error:', err.message);
+    try { if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (e) {}
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`VoxNote server running on port ${PORT}`);
+});
