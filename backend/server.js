@@ -231,7 +231,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:       'nano',  // ✅ Best for speaker diarization
+      speech_models:       ['nano'],  // ✅ Best for speaker diarization
     });
 
     console.log('Transcript status:', transcript.status);
