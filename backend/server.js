@@ -54,7 +54,25 @@ app.post('/api/register', (req, res) => {
 app.get('/realtime-token', async (req, res) => {
   try {
     console.log('Generating real-time token...');
-    const token = await aai.realtime.createTemporaryToken({ expires_in: 480 });
+
+    // ✅ Use direct HTTP API — more reliable than SDK method
+    const response = await fetch('https://streaming.assemblyai.com/v3/tokens', {
+      method:  'POST',
+      headers: {
+        'Authorization': process.env.ASSEMBLYAI_KEY,
+        'Content-Type':  'application/json',
+      },
+      body: JSON.stringify({ expires_in_seconds: 480 }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`AssemblyAI token error: ${response.status} ${errText}`);
+    }
+
+    const data  = await response.json();
+    const token = data.token;
+
     console.log('Token generated successfully');
     res.json({ success: true, token });
   } catch (err) {
