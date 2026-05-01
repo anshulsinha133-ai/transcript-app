@@ -55,14 +55,16 @@ app.get('/realtime-token', async (req, res) => {
   try {
     console.log('Generating real-time token...');
 
-    const response = await fetch('https://streaming.assemblyai.com/v3/tokens', {
-      method:  'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.ASSEMBLYAI_KEY}`,
-        'Content-Type':  'application/json',
-      },
-      body: JSON.stringify({ expires_in_seconds: 480 }),
-    });
+    // ✅ Correct: GET request, /v3/token (no s), query params, no Bearer prefix
+    const response = await fetch(
+      `https://streaming.assemblyai.com/v3/token?expires_in_seconds=480`,
+      {
+        method:  'GET',
+        headers: {
+          'Authorization': process.env.ASSEMBLYAI_KEY,
+        },
+      }
+    );
 
     const responseText = await response.text();
     console.log('Token API response:', response.status, responseText);
