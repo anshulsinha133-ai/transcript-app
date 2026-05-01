@@ -48,33 +48,35 @@ app.post('/api/register', (req, res) => {
   return res.json({ success: true, message: 'User registered (demo)' });
 });
 
-// ─── NEW: Real-time token route ───
-// AssemblyAI requires a temporary token for WebSocket connections
-// This keeps the API key safe on the server — never exposed to the app
+// ─── Real-time token route ───
+// Generates a temporary AssemblyAI token for WebSocket streaming
+// Keeps API key safe on server — never exposed to the app
 app.get('/realtime-token', async (req, res) => {
   try {
     console.log('Generating real-time token...');
 
-    // ✅ Use direct HTTP API — more reliable than SDK method
     const response = await fetch('https://streaming.assemblyai.com/v3/tokens', {
       method:  'POST',
       headers: {
-        'Authorization': process.env.ASSEMBLYAI_KEY,
+        'Authorization': `Bearer ${process.env.ASSEMBLYAI_KEY}`,
         'Content-Type':  'application/json',
       },
       body: JSON.stringify({ expires_in_seconds: 480 }),
     });
 
+    const responseText = await response.text();
+    console.log('Token API response:', response.status, responseText);
+
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`AssemblyAI token error: ${response.status} ${errText}`);
+      throw new Error(`Token error: ${response.status} ${responseText}`);
     }
 
-    const data  = await response.json();
+    const data  = JSON.parse(responseText);
     const token = data.token;
 
     console.log('Token generated successfully');
     res.json({ success: true, token });
+
   } catch (err) {
     console.error('Real-time token error:', err.message);
     res.status(500).json({ success: false, error: err.message });
