@@ -329,7 +329,7 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro'],
+      speech_models: ['universal-3-pro', 'universal-2'],
     });
 
     console.log('Job submitted! ID:', job.id);
@@ -402,7 +402,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro'],
+      speech_models: ['universal-3-pro', 'universal-2'],
     });
 
     console.log('Transcript status:', transcript.status);
