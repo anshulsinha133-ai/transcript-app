@@ -48,6 +48,21 @@ app.post('/api/register', (req, res) => {
   return res.json({ success: true, message: 'User registered (demo)' });
 });
 
+// ─── NEW: Real-time token route ───
+// AssemblyAI requires a temporary token for WebSocket connections
+// This keeps the API key safe on the server — never exposed to the app
+app.get('/realtime-token', async (req, res) => {
+  try {
+    console.log('Generating real-time token...');
+    const token = await aai.realtime.createTemporaryToken({ expires_in: 480 });
+    console.log('Token generated successfully');
+    res.json({ success: true, token });
+  } catch (err) {
+    console.error('Real-time token error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/summarize', async (req, res) => {
   const { transcript } = req.body;
   if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
@@ -78,15 +93,12 @@ Be concise and professional.`
   }
 });
 
-// ─── /chat route ───
 app.post('/chat', async (req, res) => {
   const { question, transcripts } = req.body;
   if (!question) return res.status(400).json({ success: false, error: 'No question provided' });
   if (!transcripts || transcripts.length === 0) return res.status(400).json({ success: false, error: 'No transcripts provided' });
 
   try {
-    console.log('Chat question:', question);
-
     const transcriptContext = transcripts.map((t, i) => {
       const date = new Date(t.createdAt).toLocaleDateString('en-IN');
       const speakers = t.utterances && t.utterances.length > 0
@@ -102,7 +114,6 @@ app.post('/chat', async (req, res) => {
           role: 'system',
           content: `You are VoxNote AI, an intelligent assistant for Indian businesses.
 You have access to the user's meeting transcripts and recordings.
-Your job is to answer questions about what was discussed in meetings.
 Rules:
 - Always answer in clear English
 - Be specific — mention which recording the info came from
@@ -231,7 +242,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models: ['universal-3-pro'],  // ✅ Best for speaker diarization
+      speech_models:      ['universal-3-pro'],
     });
 
     console.log('Transcript status:', transcript.status);
@@ -247,7 +258,6 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
 
     console.log('Speakers detected:', speakerList);
 
-    // ✅ FIX: Changed 'User' to 'Speaker'
     const utterances = transcript.utterances?.map(u => ({
       speaker: 'Speaker ' + u.speaker,
       text:    u.text,
