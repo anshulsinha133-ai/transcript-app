@@ -1,4 +1,4 @@
-import axios from 'axios';
+﻿import axios from 'axios';
 
 const OPENAI_API_KEY = '';
 const RENDER_URL = 'https://transcript-app-lbpe.onrender.com';
@@ -32,11 +32,46 @@ export const summarizeTranscript = async (transcript) => {
   }
 };
 
+// ─── ACTION 2: NEW chatWithTranscripts FUNCTION ───
+// Sends user question + transcript(s) to backend /chat route
+// Works for single transcript OR all transcripts
+export const chatWithTranscripts = async (question, transcripts) => {
+  try {
+    const response = await axios.post(
+      `${RENDER_URL}/chat`,
+      {
+        question,
+        transcripts: transcripts.map(t => ({
+          title:      t.title,
+          createdAt:  t.createdAt,
+          text:       t.text,
+          englishText: t.englishText,
+          utterances:  t.utterances || [],
+        })),
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 60000,
+      }
+    );
+    return {
+      success:  true,
+      answer:   response.data.answer,
+      question: response.data.question,
+    };
+  } catch (err) {
+    console.error('Chat error:', err.message);
+    return {
+      success: false,
+      error:   err.message || 'Chat failed',
+    };
+  }
+};
+
 export const transcribeWithSpeakers = async (uri, onProgress = null) => {
   try {
     if (onProgress) onProgress('Preparing audio...', 10);
 
-    // ✅ FormData streaming — no base64, no memory crash
     const formData = new FormData();
     formData.append('audio', {
       uri:  uri,
@@ -46,20 +81,19 @@ export const transcribeWithSpeakers = async (uri, onProgress = null) => {
 
     if (onProgress) onProgress('Uploading audio...', 20);
 
-    // ✅ NO Content-Type header — React Native sets it automatically with boundary
-    const response = await fetch(`${RENDER_URL}/transcribe-speakers`, {
-      method: 'POST',
-      body:   formData,
-    });
+    const response = await axios.post(
+      `${RENDER_URL}/transcribe-speakers`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000,
+        transformRequest: (data) => data,
+      }
+    );
 
     if (onProgress) onProgress('Processing speakers...', 60);
 
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Server error ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
+    const data = response.data;
 
     if (!data.success) {
       throw new Error(data.error || 'Transcription failed');

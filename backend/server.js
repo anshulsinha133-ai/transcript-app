@@ -78,30 +78,20 @@ Be concise and professional.`
   }
 });
 
-// ─── ACTION 1: NEW /chat ROUTE ───
-// Allows users to ask questions across one or all transcripts
-// Example: "What did we discuss about budget?" or "Who mentioned the deadline?"
+// ─── /chat route ───
 app.post('/chat', async (req, res) => {
   const { question, transcripts } = req.body;
-
-  if (!question) {
-    return res.status(400).json({ success: false, error: 'No question provided' });
-  }
-  if (!transcripts || transcripts.length === 0) {
-    return res.status(400).json({ success: false, error: 'No transcripts provided' });
-  }
+  if (!question) return res.status(400).json({ success: false, error: 'No question provided' });
+  if (!transcripts || transcripts.length === 0) return res.status(400).json({ success: false, error: 'No transcripts provided' });
 
   try {
     console.log('Chat question:', question);
-    console.log('Number of transcripts:', transcripts.length);
 
-    // Build context from all transcripts
     const transcriptContext = transcripts.map((t, i) => {
       const date = new Date(t.createdAt).toLocaleDateString('en-IN');
       const speakers = t.utterances && t.utterances.length > 0
         ? t.utterances.map(u => `${u.speaker}: ${u.englishText || u.text}`).join('\n')
         : (t.englishText || t.text);
-
       return `--- Recording ${i + 1}: "${t.title}" (${date}) ---\n${speakers}`;
     }).join('\n\n');
 
@@ -112,20 +102,12 @@ app.post('/chat', async (req, res) => {
           role: 'system',
           content: `You are VoxNote AI, an intelligent assistant for Indian businesses.
 You have access to the user's meeting transcripts and recordings.
-The transcripts may contain English, Hindi, or Marathi conversations.
-
-Your job is to:
-1. Answer questions about what was discussed in meetings
-2. Find specific information across multiple recordings
-3. Identify who said what and when
-4. Extract insights, action items, or decisions mentioned
-
+Your job is to answer questions about what was discussed in meetings.
 Rules:
 - Always answer in clear English
-- Be specific — mention which recording the information came from
-- If information is not in the transcripts, say "I couldn't find that in your recordings"
-- Keep answers concise and helpful
-- For Indian names and terms, keep them as-is`
+- Be specific — mention which recording the info came from
+- If not in transcripts, say "I couldn't find that in your recordings"
+- Keep answers concise and helpful`
         },
         {
           role: 'user',
@@ -135,15 +117,7 @@ Rules:
       max_tokens: 800,
     });
 
-    const answer = completion.choices[0].message.content;
-    console.log('Chat answer generated');
-
-    res.json({
-      success:  true,
-      answer:   answer,
-      question: question,
-    });
-
+    res.json({ success: true, answer: completion.choices[0].message.content, question });
   } catch (err) {
     console.error('/chat error:', err.message);
     res.status(500).json({ success: false, error: 'Chat failed: ' + err.message });
@@ -213,15 +187,12 @@ const extractActionItems = async (text) => {
           role: 'system',
           content: `You are an assistant that extracts action items from meeting transcripts.
 Rules:
-1. Each action item must start with a verb (Call, Send, Review, Schedule, etc.)
+1. Each action item must start with a verb
 2. Include who is responsible if mentioned
 3. Include deadline if mentioned
-4. Return ONLY a JSON array like this:
-[
-  {"task": "Send proposal to client", "owner": "Anshul", "deadline": "Friday"},
-  {"task": "Review Q3 report", "owner": "Team", "deadline": null}
-]
-5. If no action items found, return empty array: []
+4. Return ONLY a JSON array:
+[{"task": "Send proposal", "owner": "Anshul", "deadline": "Friday"}]
+5. If no action items, return: []
 6. Return ONLY the JSON array, nothing else`
         },
         { role: 'user', content: 'Extract action items:\n\n' + text }
@@ -260,7 +231,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro', 'universal-2'],
+      speech_model:       'nano',  // ✅ Best for speaker diarization
     });
 
     console.log('Transcript status:', transcript.status);
@@ -276,8 +247,9 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
 
     console.log('Speakers detected:', speakerList);
 
+    // ✅ FIX: Changed 'User' to 'Speaker'
     const utterances = transcript.utterances?.map(u => ({
-      speaker: 'User ' + u.speaker,
+      speaker: 'Speaker ' + u.speaker,
       text:    u.text,
       start:   u.start,
       end:     u.end,

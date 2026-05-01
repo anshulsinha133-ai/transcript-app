@@ -46,27 +46,27 @@ export default function RecordScreen({ navigation }) {
       });
 
       const { recording } = await Audio.Recording.createAsync({
-  android: {
-    extension:        '.m4a',
-    outputFormat:     Audio.AndroidOutputFormat.MPEG_4,
-    audioEncoder:     Audio.AndroidAudioEncoder.AAC,
-    sampleRate:       44100,
-    numberOfChannels: 1,
-    bitRate:          192000,
-  },
-  ios: {
-    extension:          '.m4a',
-    outputFormat:       Audio.IOSOutputFormat.MPEG4AAC,
-    audioQuality:       Audio.IOSAudioQuality.MAX,
-    sampleRate:         44100,
-    numberOfChannels:   1,
-    bitRate:            192000,
-    linearPCMBitDepth:  16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat:   false,
-  },
-  web: {},
-});
+        android: {
+          extension:        '.m4a',
+          outputFormat:     Audio.AndroidOutputFormat.MPEG_4,
+          audioEncoder:     Audio.AndroidAudioEncoder.AAC,
+          sampleRate:       44100,
+          numberOfChannels: 1,
+          bitRate:          192000,
+        },
+        ios: {
+          extension:            '.m4a',
+          outputFormat:         Audio.IOSOutputFormat.MPEG4AAC,
+          audioQuality:         Audio.IOSAudioQuality.MAX,
+          sampleRate:           44100,
+          numberOfChannels:     1,
+          bitRate:              192000,
+          linearPCMBitDepth:    16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat:     false,
+        },
+        web: {},
+      });
 
       recordingRef.current   = recording;
       isRecordingRef.current = true;
@@ -110,20 +110,35 @@ export default function RecordScreen({ navigation }) {
             'Recording saved';
 
           const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
-          const obj   = {
+
+          // ✅ Build transcript object — id starts as null
+          const obj = {
             ...createTranscriptObj(title, text, recordingTime),
-            utterances:   result.utterances,
-            words:        result.words,
+            utterances:   result.utterances   || [],
+            words:        result.words        || [],
             audioPath:    null,
             originalText: result.text,
-            englishText:  result.englishText,
-            autoSummary:  result.autoSummary,
-            detectedLang: result.detectedLang,
+            englishText:  result.englishText  || null,
+            autoSummary:  result.autoSummary  || null,
+            actionItems:  result.actionItems  || [],  // ✅ FIX: actionItems included
+            detectedLang: result.detectedLang || 'en',
             mode:         result.detectedLang !== 'en' ? 'auto' : 'en',
           };
-          await saveTranscript(obj);
-          setStatusText('Transcript saved! ✅');
-          setTimeout(() => navigation.navigate('Home'), 2000);
+
+          setStatusText('Saving transcript...');
+
+          // ✅ FIX: saveTranscript now returns real Supabase UUID
+          const saved = await saveTranscript(obj);
+
+          if (saved && saved.success) {
+            obj.id = saved.id; // ✅ Replace null with real Supabase UUID
+            console.log('Transcript saved with real UUID:', obj.id);
+            setStatusText('Transcript saved! ✅');
+            setTimeout(() => navigation.navigate('Home'), 2000);
+          } else {
+            setStatusText('Error saving transcript. Please try again.');
+          }
+
         } else {
           setStatusText('Error: ' + (result.error || 'Unknown error'));
         }
@@ -177,7 +192,7 @@ export default function RecordScreen({ navigation }) {
               ✨ Supports English, Hindi & Marathi{'\n'}
               ✨ Auto speaker detection{'\n'}
               ✨ Translates to English automatically{'\n'}
-              ✨ AI summary included
+              ✨ AI summary + action items included
             </Text>
           </>
         )}
@@ -211,8 +226,7 @@ const styles = StyleSheet.create({
   infoIcon:        { fontSize: 48, marginBottom: 16 },
   infoText:        { fontSize: 18, fontWeight: '600', color: '#0D3B7A',
                      marginBottom: 12, textAlign: 'center' },
-  infoSubText:     { fontSize: 14, color: '#888', textAlign: 'center',
-                     lineHeight: 26 },
+  infoSubText:     { fontSize: 14, color: '#888', textAlign: 'center', lineHeight: 26 },
   recordBtn:       { backgroundColor: '#1A56A0', padding: 20,
                      borderRadius: 16, alignItems: 'center' },
   recordBtnActive: { backgroundColor: '#C0392B' },

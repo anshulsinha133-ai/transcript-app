@@ -1,11 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, SafeAreaView, Alert,
-  ActivityIndicator, Share
+  ActivityIndicator, Share, TextInput,
+  KeyboardAvoidingView, Platform, FlatList,
+  StatusBar, Modal
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { summarizeTranscript } from '../services/api';
+import { summarizeTranscript, chatWithTranscripts } from '../services/api';
+import { updateSpeakerNames } from '../utils/storage';
+
+// ─── Dynamic speaker colors — supports up to 8 speakers ───
+const SPEAKER_COLORS = [
+  '#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF',
+  '#C0392B', '#0097A7', '#795548', '#E91E63'
+];
+const SPEAKER_BG = [
+  '#E8F0FC', '#E8F5EE', '#FEF3E8', '#F3E8FE',
+  '#FDE8E8', '#E0F7FA', '#F3EDEB', '#FCE4EC'
+];
+const getSpeakerIndex = (speaker) => {
+  // Works for "Speaker A", "Speaker B", "Anshul", "Rahul" etc.
+  const lastChar = speaker?.slice(-1)?.toUpperCase() || 'A';
+  const code     = lastChar.charCodeAt(0);
+  // If last char is a letter A-H use it directly, else hash the whole name
+  if (code >= 65 && code <= 72) {
+    return code - 65;
+  }
+  // For custom names like "Anshul", use first letter
+  const firstChar = speaker?.charAt(0)?.toUpperCase() || 'A';
+  return Math.abs(firstChar.charCodeAt(0) - 65) % SPEAKER_COLORS.length;
+};
 
 export default function TranscriptScreen({ route }) {
   const { transcript } = route.params;
@@ -13,36 +38,120 @@ export default function TranscriptScreen({ route }) {
   const [summary,        setSummary]        = useState(transcript.autoSummary || null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [showOriginal,   setShowOriginal]   = useState(false);
+  const [showChat,       setShowChat]       = useState(false);
+  const [chatMessages,   setChatMessages]   = useState([]);
+  const [chatInput,      setChatInput]      = useState('');
+  const [chatLoading,    setChatLoading]    = useState(false);
+
+  // ─── Speaker Naming State ───
+  const [utterances,      setUtterances]      = useState(transcript.utterances || []);
+  const [renamingModal,   setRenamingModal]   = useState(false);
+  const [renamingSpeaker, setRenamingSpeaker] = useState('');
+  const [newSpeakerName,  setNewSpeakerName]  = useState('');
+  const [savingName,      setSavingName]      = useState(false);
+
+  const flatListRef = useRef(null);
 
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
 
+  // ─── Tap speaker badge to open rename modal ───
+  const handleSpeakerTap = (speaker) => {
+    setRenamingSpeaker(speaker);
+    setNewSpeakerName(''); // Empty — user types new name fresh
+    setRenamingModal(true);
+  };
+
+  // ─── Save the new speaker name ───
+  const saveSpeakerName = async () => {
+    const trimmedName = newSpeakerName.trim();
+    if (!trimmedName) {
+      Alert.alert('Please enter a name');
+      return;
+    }
+
+    setSavingName(true);
+
+    // Build map: old name → new name
+    const speakerMap = { [renamingSpeaker]: trimmedName };
+
+    console.log('Saving speaker name:', speakerMap);
+    console.log('Transcript ID:', transcript.id);
+
+    const result = await updateSpeakerNames(
+      transcript.id,
+      utterances,
+      speakerMap
+    );
+
+    if (result.success) {
+      setUtterances(result.utterances);
+      setRenamingModal(false);
+      Alert.alert('✅ Renamed!', `"${renamingSpeaker}" is now "${trimmedName}"`);
+    } else {
+      Alert.alert('Error', result.error || 'Could not save name. Please try again.');
+    }
+    setSavingName(false);
+  };
+
   const copyToClipboard = async () => {
-    const textToCopy = transcript.englishText || transcript.text;
-    await Clipboard.setStringAsync(textToCopy);
+    await Clipboard.setStringAsync(transcript.englishText || transcript.text);
     Alert.alert('Copied!', 'Transcript copied to clipboard');
   };
 
   const shareTranscript = async () => {
     try {
       let shareText = transcript.title + '\n\n';
-
-      if (transcript.utterances?.length > 0) {
-        shareText += transcript.utterances.map(u =>
+      if (utterances.length > 0) {
+        shareText += utterances.map(u =>
           `${u.speaker}:\n${u.englishText || u.text}`
         ).join('\n\n');
       } else {
         shareText += transcript.englishText || transcript.text;
       }
-
-      if (summary) {
-        shareText += '\n\n--- AI Summary ---\n' + summary;
+      if (summary) shareText += '\n\n--- AI Summary ---\n' + summary;
+      if (transcript.actionItems?.length > 0) {
+        shareText += '\n\n--- Action Items ---\n';
+        transcript.actionItems.forEach((item, i) => {
+          shareText += `${i + 1}. ${item.task}`;
+          if (item.owner)    shareText += ` (${item.owner})`;
+          if (item.deadline) shareText += ` — by ${item.deadline}`;
+          shareText += '\n';
+        });
       }
+      await Share.share({ message: shareText, title: transcript.title });
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    }
+  };
 
-      await Share.share({
-        message: shareText,
-        title:   transcript.title,
-      });
+  const exportAsText = async () => {
+    try {
+      let exportText = `${transcript.title}\n${'='.repeat(50)}\n`;
+      exportText += `Date: ${formatDate(transcript.createdAt)}\n`;
+      exportText += `Duration: ${transcript.duration ? Math.round(transcript.duration / 60) + ' min' : 'N/A'}\n`;
+      exportText += `Words: ${transcript.wordCount || 0}\n\n`;
+      if (summary) exportText += `AI SUMMARY\n${'-'.repeat(30)}\n${summary}\n\n`;
+      if (transcript.actionItems?.length > 0) {
+        exportText += `ACTION ITEMS\n${'-'.repeat(30)}\n`;
+        transcript.actionItems.forEach((item, i) => {
+          exportText += `${i + 1}. ${item.task}`;
+          if (item.owner)    exportText += ` | Owner: ${item.owner}`;
+          if (item.deadline) exportText += ` | Due: ${item.deadline}`;
+          exportText += '\n';
+        });
+        exportText += '\n';
+      }
+      exportText += `TRANSCRIPT\n${'-'.repeat(30)}\n`;
+      if (utterances.length > 0) {
+        utterances.forEach(u => {
+          exportText += `[${u.speaker}]: ${u.englishText || u.text}\n\n`;
+        });
+      } else {
+        exportText += transcript.englishText || transcript.text;
+      }
+      await Clipboard.setStringAsync(exportText);
+      Alert.alert('✅ Exported!', 'Full transcript copied to clipboard!');
     } catch (err) {
       Alert.alert('Error', err.message);
     }
@@ -52,17 +161,38 @@ export default function TranscriptScreen({ route }) {
     setLoadingSummary(true);
     setSummary(null);
     try {
-      const textForSummary = transcript.englishText || transcript.text;
-      const result = await summarizeTranscript(textForSummary);
-      if (result.success) {
-        setSummary(result.summary);
-      } else {
-        Alert.alert('Error', 'Could not generate summary.');
-      }
+      const result = await summarizeTranscript(transcript.englishText || transcript.text);
+      if (result.success) setSummary(result.summary);
+      else Alert.alert('Error', 'Could not generate summary.');
     } catch (err) {
       Alert.alert('Error', err.message);
     }
     setLoadingSummary(false);
+  };
+
+  const sendChatMessage = async () => {
+    const question = chatInput.trim();
+    if (!question || chatLoading) return;
+    const userMsg = { role: 'user', text: question, id: Date.now().toString() };
+    setChatMessages(prev => [...prev, userMsg]);
+    setChatInput('');
+    setChatLoading(true);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    try {
+      const result = await chatWithTranscripts(question, [transcript]);
+      const aiMsg = {
+        role: 'ai',
+        text: result.success ? result.answer : 'Sorry, could not answer that.',
+        id:   (Date.now() + 1).toString(),
+      };
+      setChatMessages(prev => [...prev, aiMsg]);
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    } catch (err) {
+      setChatMessages(prev => [...prev, {
+        role: 'ai', text: 'Something went wrong.', id: (Date.now() + 1).toString()
+      }]);
+    }
+    setChatLoading(false);
   };
 
   const formatDate = (iso) => new Date(iso).toLocaleDateString('en-IN', {
@@ -72,32 +202,8 @@ export default function TranscriptScreen({ route }) {
 
   const formatTime = (ms) => {
     if (!ms) return '0:00';
-    const totalSeconds = Math.floor(ms / 1000);
-    const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
-    const s = (totalSeconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-
-  const getSpeakerColor = (speaker) => {
-    const colors = {
-      'Speaker A': '#1A56A0',
-      'Speaker B': '#1A7A4A',
-      'Speaker C': '#C85A00',
-      'Speaker D': '#8B1AAF',
-      'Speaker E': '#C0392B',
-    };
-    return colors[speaker] || '#1A56A0';
-  };
-
-  const getSpeakerBg = (speaker) => {
-    const colors = {
-      'Speaker A': '#E8F0FC',
-      'Speaker B': '#E8F5EE',
-      'Speaker C': '#FEF3E8',
-      'Speaker D': '#F3E8FE',
-      'Speaker E': '#FDE8E8',
-    };
-    return colors[speaker] || '#E8F0FC';
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
   };
 
   const getLangBadge = () => {
@@ -108,16 +214,161 @@ export default function TranscriptScreen({ route }) {
     return '🌐 Auto';
   };
 
+  // ─── Speaker Rename Modal ───
+  const renderRenameModal = () => (
+    <Modal
+      visible={renamingModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setRenamingModal(false)}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBox}>
+
+          {/* Header */}
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>✏️ Rename Speaker</Text>
+            <TouchableOpacity onPress={() => setRenamingModal(false)}>
+              <Text style={styles.modalCloseX}>✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Current name */}
+          <View style={styles.modalCurrentRow}>
+            <Text style={styles.modalCurrentLabel}>Current name:</Text>
+            <View style={[styles.modalCurrentBadge,
+              { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(renamingSpeaker)] }]}>
+              <Text style={styles.modalCurrentBadgeText}>{renamingSpeaker}</Text>
+            </View>
+          </View>
+
+          {/* New name input */}
+          <Text style={styles.modalInputLabel}>New name:</Text>
+          <TextInput
+            style={styles.modalInput}
+            value={newSpeakerName}
+            onChangeText={setNewSpeakerName}
+            placeholder={`e.g. Anshul, Rahul, Priya...`}
+            placeholderTextColor="#AAA"
+            autoFocus
+            maxLength={30}
+            returnKeyType="done"
+            onSubmitEditing={saveSpeakerName}
+          />
+
+          <Text style={styles.modalHint}>
+            💡 All "{renamingSpeaker}" labels in this recording will be renamed
+          </Text>
+
+          {/* Buttons */}
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => setRenamingModal(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalSaveBtn, savingName && { opacity: 0.6 }]}
+              onPress={saveSpeakerName}
+              disabled={savingName}>
+              {savingName
+                ? <ActivityIndicator size="small" color="#FFF" />
+                : <Text style={styles.modalSaveText}>✅ Save Name</Text>
+              }
+            </TouchableOpacity>
+          </View>
+
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // ─── Chat Panel ───
+  const renderChatPanel = () => (
+    <View style={styles.chatOverlay}>
+      <StatusBar barStyle="light-content" backgroundColor="#6C3FA0" />
+      <View style={styles.chatHeader}>
+        <TouchableOpacity onPress={() => setShowChat(false)} style={styles.chatBackBtn}>
+          <Text style={styles.chatBackText}>← Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.chatHeaderTitle}>💬 Ask AI</Text>
+        <View style={{ width: 60 }} />
+      </View>
+      <View style={styles.chatContext}>
+        <Text style={styles.chatContextText} numberOfLines={1}>📝 {transcript.title}</Text>
+      </View>
+      {chatMessages.length === 0 && (
+        <View style={styles.suggestionsContainer}>
+          <Text style={styles.suggestionsTitle}>Try asking:</Text>
+          <View style={styles.suggestionsGrid}>
+            {['What were the main topics?', 'What action items were mentioned?',
+              'Who said what about the project?', 'What decisions were made?'
+            ].map((q, i) => (
+              <TouchableOpacity key={i} style={styles.suggestionChip} onPress={() => setChatInput(q)}>
+                <Text style={styles.suggestionText}>{q}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+      <FlatList
+        ref={flatListRef}
+        data={chatMessages}
+        keyExtractor={item => item.id}
+        style={styles.chatMessages}
+        contentContainerStyle={styles.chatMessagesContent}
+        renderItem={({ item }) => (
+          <View style={[styles.chatBubble, item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
+            {item.role === 'ai' && <Text style={styles.aiLabel}>🤖 VoxNote AI</Text>}
+            <Text style={[styles.chatBubbleText, item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
+              {item.text}
+            </Text>
+          </View>
+        )}
+        ListFooterComponent={chatLoading ? (
+          <View style={styles.typingIndicator}>
+            <ActivityIndicator size="small" color="#6C3FA0" />
+            <Text style={styles.typingText}>VoxNote AI is thinking...</Text>
+          </View>
+        ) : null}
+      />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <View style={styles.chatInputWrapper}>
+          <View style={styles.chatInputRow}>
+            <TextInput
+              style={styles.chatInput}
+              placeholder="Ask anything about this recording..."
+              placeholderTextColor="#888"
+              value={chatInput}
+              onChangeText={setChatInput}
+              multiline
+              maxLength={500}
+            />
+            <TouchableOpacity
+              style={[styles.sendBtn, (!chatInput.trim() || chatLoading) && styles.sendBtnDisabled]}
+              onPress={sendChatMessage}
+              disabled={!chatInput.trim() || chatLoading}>
+              <Text style={styles.sendBtnText}>➤</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.navBarSpacer} />
+        </View>
+      </KeyboardAvoidingView>
+    </View>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
+
+      {/* Modals */}
+      {renderRenameModal()}
+      {showChat && renderChatPanel()}
+
       <ScrollView contentContainerStyle={styles.scroll}>
 
         {/* Title & Meta */}
         <Text style={styles.title}>{transcript.title}</Text>
         <View style={styles.metaRow}>
-          <Text style={styles.meta}>
-            {transcript.wordCount} words  •  {formatDate(transcript.createdAt)}
-          </Text>
+          <Text style={styles.meta}>{transcript.wordCount} words  •  {formatDate(transcript.createdAt)}</Text>
           <View style={styles.langBadge}>
             <Text style={styles.langBadgeText}>{getLangBadge()}</Text>
           </View>
@@ -129,19 +380,31 @@ export default function TranscriptScreen({ route }) {
             <Text style={styles.btnIcon}>📋</Text>
             <Text style={styles.btnText}>Copy</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, styles.btnGreen]}
-            onPress={getSummary}>
+          <TouchableOpacity style={[styles.btn, styles.btnGreen]} onPress={getSummary}>
             <Text style={styles.btnIcon}>🤖</Text>
             <Text style={styles.btnText}>Summary</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, styles.btnOrange]}
-            onPress={shareTranscript}>
+          <TouchableOpacity style={[styles.btn, styles.btnOrange]} onPress={shareTranscript}>
             <Text style={styles.btnIcon}>📤</Text>
             <Text style={styles.btnText}>Share</Text>
           </TouchableOpacity>
         </View>
+
+        {/* AI Chat Button */}
+        <TouchableOpacity style={styles.chatBtn} onPress={() => setShowChat(true)}>
+          <Text style={styles.chatBtnIcon}>💬</Text>
+          <View style={styles.chatBtnTextWrapper}>
+            <Text style={styles.chatBtnTitle}>Ask AI about this recording</Text>
+            <Text style={styles.chatBtnSubtitle}>What was discussed? Any action items?</Text>
+          </View>
+          <Text style={styles.chatBtnArrow}>›</Text>
+        </TouchableOpacity>
+
+        {/* Export Button */}
+        <TouchableOpacity style={styles.exportBtn} onPress={exportAsText}>
+          <Text style={styles.exportBtnIcon}>📄</Text>
+          <Text style={styles.exportBtnText}>Export Full Transcript</Text>
+        </TouchableOpacity>
 
         {/* Loading Summary */}
         {loadingSummary && (
@@ -159,112 +422,117 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* English Translation Box */}
+        {/* Action Items */}
+        {transcript.actionItems?.length > 0 && (
+          <View style={styles.actionItemsBox}>
+            <Text style={styles.actionItemsTitle}>✅ Action Items</Text>
+            {transcript.actionItems.map((item, index) => (
+              <View key={index} style={styles.actionItem}>
+                <View style={styles.actionItemHeader}>
+                  <View style={styles.actionItemNumber}>
+                    <Text style={styles.actionItemNumberText}>{index + 1}</Text>
+                  </View>
+                  <Text style={styles.actionItemTask}>{item.task}</Text>
+                </View>
+                <View style={styles.actionItemMeta}>
+                  {item.owner && (
+                    <View style={styles.actionItemBadge}>
+                      <Text style={styles.actionItemBadgeText}>👤 {item.owner}</Text>
+                    </View>
+                  )}
+                  {item.deadline && (
+                    <View style={[styles.actionItemBadge, styles.deadlineBadge]}>
+                      <Text style={styles.actionItemBadgeText}>📅 {item.deadline}</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Translation Box */}
         {hasTranslation && (
           <View style={styles.translationBox}>
             <View style={styles.translationHeader}>
-              <Text style={styles.translationTitle}>
-                🇬🇧 English Translation
-              </Text>
-              <TouchableOpacity
-                style={styles.toggleBtn}
-                onPress={() => setShowOriginal(!showOriginal)}>
-                <Text style={styles.toggleBtnText}>
-                  {showOriginal ? 'Hide Original' : 'Show Original'}
-                </Text>
+              <Text style={styles.translationTitle}>🇬🇧 English Translation</Text>
+              <TouchableOpacity style={styles.toggleBtn} onPress={() => setShowOriginal(!showOriginal)}>
+                <Text style={styles.toggleBtnText}>{showOriginal ? 'Hide Original' : 'Show Original'}</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.translationText}>
-              {transcript.englishText}
-            </Text>
+            <Text style={styles.translationText}>{transcript.englishText}</Text>
             {showOriginal && transcript.originalText && (
               <View style={styles.originalBox}>
-                <Text style={styles.originalLabel}>
-                  Original (Roman script):
-                </Text>
-                <Text style={styles.originalText}>
-                  {transcript.originalText}
-                </Text>
+                <Text style={styles.originalLabel}>Original (Roman script):</Text>
+                <Text style={styles.originalText}>{transcript.originalText}</Text>
               </View>
             )}
           </View>
         )}
 
-        {/* Speaker Transcript */}
-        {transcript.utterances && transcript.utterances.length > 0 ? (
+        {/* ─── Speaker Transcript with Rename ─── */}
+        {utterances.length > 0 ? (
           <View style={styles.transcriptBox}>
-            <Text style={styles.transcriptLabel}>
-              🎙 Speaker Transcript
-            </Text>
+            <Text style={styles.transcriptLabel}>🎙 Speaker Transcript</Text>
 
-            {/* Speaker Legend */}
+            {/* Hint */}
+            <View style={styles.renameHintBox}>
+              <Text style={styles.renameHintText}>✏️ Tap any speaker name to rename</Text>
+            </View>
+
+            {/* Speaker Legend — tap to rename */}
             <View style={styles.legendRow}>
-              {[...new Set(transcript.utterances.map(u => u.speaker))].map(speaker => (
-                <View
+              {[...new Set(utterances.map(u => u.speaker))].map(speaker => (
+                <TouchableOpacity
                   key={speaker}
                   style={[styles.legendBadge,
-                    { backgroundColor: getSpeakerColor(speaker) }]}>
-                  <Text style={styles.legendText}>{speaker}</Text>
-                </View>
+                    { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(speaker)] }]}
+                  onPress={() => handleSpeakerTap(speaker)}
+                  activeOpacity={0.7}>
+                  <Text style={styles.legendText}>{speaker}  ✏️</Text>
+                </TouchableOpacity>
               ))}
             </View>
 
             {/* Utterances */}
-            {transcript.utterances.map((utterance, index) => (
-              <View
-                key={index}
-                style={[styles.utteranceBox,
-                  { backgroundColor: getSpeakerBg(utterance.speaker) }]}>
-                <View style={styles.speakerRow}>
-                  <View style={[styles.speakerBadge,
-                    { backgroundColor: getSpeakerColor(utterance.speaker) }]}>
-                    <Text style={styles.speakerBadgeText}>
-                      {utterance.speaker}
+            {utterances.map((utterance, index) => {
+              const idx = getSpeakerIndex(utterance.speaker);
+              return (
+                <View key={index} style={[styles.utteranceBox, { backgroundColor: SPEAKER_BG[idx] }]}>
+                  <View style={styles.speakerRow}>
+                    {/* Tap speaker badge to rename */}
+                    <TouchableOpacity
+                      style={[styles.speakerBadge, { backgroundColor: SPEAKER_COLORS[idx] }]}
+                      onPress={() => handleSpeakerTap(utterance.speaker)}
+                      activeOpacity={0.7}>
+                      <Text style={styles.speakerBadgeText}>{utterance.speaker}  ✏️</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.utteranceTime}>
+                      {formatTime(utterance.start)} — {formatTime(utterance.end)}
                     </Text>
                   </View>
-                  <Text style={styles.utteranceTime}>
-                    {formatTime(utterance.start)} — {formatTime(utterance.end)}
-                  </Text>
+                  <Text style={styles.utteranceText}>{utterance.englishText || utterance.text}</Text>
+                  {utterance.englishText && utterance.englishText !== utterance.text && (
+                    <Text style={styles.utteranceOriginal}>{utterance.text}</Text>
+                  )}
                 </View>
-
-                {/* Show English if available, else original */}
-                <Text style={styles.utteranceText}>
-                  {utterance.englishText || utterance.text}
-                </Text>
-
-                {/* Show original as italic below if translated */}
-                {utterance.englishText &&
-                 utterance.englishText !== utterance.text && (
-                  <Text style={styles.utteranceOriginal}>
-                    {utterance.text}
-                  </Text>
-                )}
-              </View>
-            ))}
+              );
+            })}
           </View>
         ) : (
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>📝 Full Transcript</Text>
-            <Text style={styles.transcriptText}>
-              {transcript.englishText || transcript.text}
-            </Text>
+            <Text style={styles.transcriptText}>{transcript.englishText || transcript.text}</Text>
             {hasTranslation && (
               <>
-                <TouchableOpacity
-                  style={[styles.toggleBtn, { marginTop: 12 }]}
+                <TouchableOpacity style={[styles.toggleBtn, { marginTop: 12 }]}
                   onPress={() => setShowOriginal(!showOriginal)}>
-                  <Text style={styles.toggleBtnText}>
-                    {showOriginal ? 'Hide Original' : 'Show Original'}
-                  </Text>
+                  <Text style={styles.toggleBtnText}>{showOriginal ? 'Hide Original' : 'Show Original'}</Text>
                 </TouchableOpacity>
                 {showOriginal && (
                   <View style={styles.originalBox}>
-                    <Text style={styles.originalLabel}>
-                      Original (Roman script):
-                    </Text>
-                    <Text style={styles.originalText}>
-                      {transcript.originalText || transcript.text}
-                    </Text>
+                    <Text style={styles.originalLabel}>Original (Roman script):</Text>
+                    <Text style={styles.originalText}>{transcript.originalText || transcript.text}</Text>
                   </View>
                 )}
               </>
@@ -278,68 +546,153 @@ export default function TranscriptScreen({ route }) {
 }
 
 const styles = StyleSheet.create({
-  container:        { flex: 1, backgroundColor: '#F5F7FA' },
-  scroll:           { padding: 20, paddingBottom: 40 },
-  title:            { fontSize: 20, fontWeight: 'bold',
-                      color: '#0D3B7A', marginBottom: 6 },
-  metaRow:          { flexDirection: 'row', justifyContent: 'space-between',
-                      alignItems: 'center', marginBottom: 16,
-                      flexWrap: 'wrap', gap: 8 },
-  meta:             { fontSize: 12, color: '#888' },
-  langBadge:        { backgroundColor: '#E8F0FC', paddingHorizontal: 10,
-                      paddingVertical: 4, borderRadius: 12 },
-  langBadgeText:    { fontSize: 11, color: '#1A56A0', fontWeight: '600' },
-  actions:          { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  btn:              { flex: 1, backgroundColor: '#1A56A0', padding: 10,
-                      borderRadius: 10, alignItems: 'center' },
-  btnGreen:         { backgroundColor: '#1A7A4A' },
-  btnOrange:        { backgroundColor: '#C85A00' },
-  btnIcon:          { fontSize: 18, marginBottom: 2 },
-  btnText:          { color: '#fff', fontWeight: 'bold', fontSize: 12 },
-  loadingBox:       { flexDirection: 'row', alignItems: 'center',
-                      gap: 10, padding: 16, backgroundColor: '#EFF4FF',
-                      borderRadius: 10, marginBottom: 16 },
-  loadingText:      { color: '#1A56A0', fontSize: 13 },
-  summaryBox:       { backgroundColor: '#D6F0E2', padding: 16,
-                      borderRadius: 12, marginBottom: 16,
-                      borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
-  summaryTitle:     { fontSize: 14, fontWeight: 'bold',
-                      color: '#1A7A4A', marginBottom: 10 },
-  summaryText:      { fontSize: 13, color: '#333', lineHeight: 22 },
-  translationBox:   { backgroundColor: '#FFF9E6', padding: 16,
-                      borderRadius: 12, marginBottom: 16,
-                      borderLeftWidth: 4, borderLeftColor: '#E6A817' },
-  translationHeader:{ flexDirection: 'row', justifyContent: 'space-between',
-                      alignItems: 'center', marginBottom: 10 },
+  container:    { flex: 1, backgroundColor: '#F5F7FA' },
+  scroll:       { padding: 20, paddingBottom: 40 },
+  title:        { fontSize: 20, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 6 },
+  metaRow:      { flexDirection: 'row', justifyContent: 'space-between',
+                  alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 },
+  meta:         { fontSize: 12, color: '#888' },
+  langBadge:    { backgroundColor: '#E8F0FC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  langBadgeText:{ fontSize: 11, color: '#1A56A0', fontWeight: '600' },
+  actions:      { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  btn:          { flex: 1, backgroundColor: '#1A56A0', padding: 10, borderRadius: 10, alignItems: 'center' },
+  btnGreen:     { backgroundColor: '#1A7A4A' },
+  btnOrange:    { backgroundColor: '#C85A00' },
+  btnIcon:      { fontSize: 18, marginBottom: 2 },
+  btnText:      { color: '#fff', fontWeight: 'bold', fontSize: 12 },
+
+  chatBtn:           { flexDirection: 'row', alignItems: 'center', backgroundColor: '#6C3FA0',
+                       padding: 14, borderRadius: 12, marginBottom: 10, gap: 12 },
+  chatBtnIcon:       { fontSize: 24 },
+  chatBtnTextWrapper:{ flex: 1 },
+  chatBtnTitle:      { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  chatBtnSubtitle:   { color: '#DDD0FF', fontSize: 11, marginTop: 2 },
+  chatBtnArrow:      { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
+
+  exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A',
+                  padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
+  exportBtnIcon:{ fontSize: 18 },
+  exportBtnText:{ color: '#FFFFFF', fontWeight: '600', fontSize: 13, flex: 1 },
+
+  loadingBox:   { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16,
+                  backgroundColor: '#EFF4FF', borderRadius: 10, marginBottom: 16 },
+  loadingText:  { color: '#1A56A0', fontSize: 13 },
+
+  summaryBox:   { backgroundColor: '#D6F0E2', padding: 16, borderRadius: 12,
+                  marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
+  summaryTitle: { fontSize: 14, fontWeight: 'bold', color: '#1A7A4A', marginBottom: 10 },
+  summaryText:  { fontSize: 13, color: '#333', lineHeight: 22 },
+
+  actionItemsBox:      { backgroundColor: '#FFF3E0', padding: 16, borderRadius: 12,
+                         marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#FF9800' },
+  actionItemsTitle:    { fontSize: 14, fontWeight: 'bold', color: '#E65100', marginBottom: 12 },
+  actionItem:          { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 12, marginBottom: 8 },
+  actionItemHeader:    { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 6 },
+  actionItemNumber:    { width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF9800',
+                         justifyContent: 'center', alignItems: 'center' },
+  actionItemNumberText:{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 },
+  actionItemTask:      { flex: 1, fontSize: 14, color: '#333', fontWeight: '500', lineHeight: 20 },
+  actionItemMeta:      { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  actionItemBadge:     { backgroundColor: '#FFF3E0', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
+  deadlineBadge:       { backgroundColor: '#FCE4EC' },
+  actionItemBadgeText: { fontSize: 11, color: '#E65100', fontWeight: '600' },
+
+  translationBox:   { backgroundColor: '#FFF9E6', padding: 16, borderRadius: 12,
+                      marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#E6A817' },
+  translationHeader:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   translationTitle: { fontSize: 14, fontWeight: 'bold', color: '#8B6A00' },
   translationText:  { fontSize: 14, color: '#333', lineHeight: 24 },
-  originalBox:      { marginTop: 12, padding: 12,
-                      backgroundColor: '#F5F0E0', borderRadius: 8 },
-  originalLabel:    { fontSize: 11, fontWeight: '600',
-                      color: '#888', marginBottom: 6 },
-  originalText:     { fontSize: 13, color: '#666',
-                      lineHeight: 22, fontStyle: 'italic' },
-  toggleBtn:        { paddingHorizontal: 10, paddingVertical: 4,
-                      backgroundColor: '#E6A817', borderRadius: 8 },
+  originalBox:      { marginTop: 12, padding: 12, backgroundColor: '#F5F0E0', borderRadius: 8 },
+  originalLabel:    { fontSize: 11, fontWeight: '600', color: '#888', marginBottom: 6 },
+  originalText:     { fontSize: 13, color: '#666', lineHeight: 22, fontStyle: 'italic' },
+  toggleBtn:        { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#E6A817', borderRadius: 8 },
   toggleBtnText:    { fontSize: 11, color: '#fff', fontWeight: '600' },
-  transcriptBox:    { backgroundColor: '#fff', padding: 16,
-                      borderRadius: 12, marginBottom: 16 },
-  transcriptLabel:  { fontSize: 14, fontWeight: 'bold',
-                      color: '#0D3B7A', marginBottom: 12 },
+
+  transcriptBox:    { backgroundColor: '#fff', padding: 16, borderRadius: 12, marginBottom: 16 },
+  transcriptLabel:  { fontSize: 14, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 8 },
   transcriptText:   { fontSize: 15, color: '#333', lineHeight: 28 },
-  legendRow:        { flexDirection: 'row', gap: 8,
-                      marginBottom: 16, flexWrap: 'wrap' },
-  legendBadge:      { paddingHorizontal: 12, paddingVertical: 4,
-                      borderRadius: 12 },
-  legendText:       { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+
+  renameHintBox:    { backgroundColor: '#FFF3CD', padding: 8, borderRadius: 8,
+                      marginBottom: 12, alignItems: 'center' },
+  renameHintText:   { fontSize: 12, color: '#856404', fontWeight: '500' },
+
+  legendRow:        { flexDirection: 'row', gap: 8, marginBottom: 16, flexWrap: 'wrap' },
+  legendBadge:      { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
+  legendText:       { color: '#fff', fontSize: 13, fontWeight: 'bold' },
   utteranceBox:     { borderRadius: 10, padding: 14, marginBottom: 12 },
-  speakerRow:       { flexDirection: 'row', alignItems: 'center',
-                      gap: 10, marginBottom: 8 },
-  speakerBadge:     { paddingHorizontal: 10, paddingVertical: 4,
-                      borderRadius: 12 },
+  speakerRow:       { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  speakerBadge:     { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 12 },
   speakerBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' },
   utteranceTime:    { fontSize: 11, color: '#666' },
   utteranceText:    { fontSize: 15, color: '#333', lineHeight: 26 },
-  utteranceOriginal:{ fontSize: 12, color: '#888', lineHeight: 20,
-                      marginTop: 6, fontStyle: 'italic' },
+  utteranceOriginal:{ fontSize: 12, color: '#888', lineHeight: 20, marginTop: 6, fontStyle: 'italic' },
+
+  // ─── Rename Modal ───
+  modalOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+                      justifyContent: 'flex-end' },
+  modalBox:         { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20,
+                      borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
+  modalHeader:      { flexDirection: 'row', justifyContent: 'space-between',
+                      alignItems: 'center', marginBottom: 16 },
+  modalTitle:       { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
+  modalCloseX:      { fontSize: 22, color: '#888', padding: 4 },
+  modalCurrentRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
+  modalCurrentLabel:{ fontSize: 13, color: '#666' },
+  modalCurrentBadge:{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
+  modalCurrentBadgeText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 13 },
+  modalInputLabel:  { fontSize: 13, color: '#333', fontWeight: '600', marginBottom: 8 },
+  modalInput:       { backgroundColor: '#F5F7FA', borderWidth: 2, borderColor: '#1A56A0',
+                      borderRadius: 12, padding: 14, fontSize: 18, color: '#333',
+                      marginBottom: 10, fontWeight: '500' },
+  modalHint:        { fontSize: 11, color: '#888', marginBottom: 20, fontStyle: 'italic' },
+  modalButtons:     { flexDirection: 'row', gap: 12 },
+  modalCancelBtn:   { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1.5,
+                      borderColor: '#DDD', alignItems: 'center' },
+  modalCancelText:  { fontSize: 15, color: '#666', fontWeight: '600' },
+  modalSaveBtn:     { flex: 2, padding: 14, borderRadius: 12,
+                      backgroundColor: '#1A56A0', alignItems: 'center' },
+  modalSaveText:    { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
+
+  // ─── Chat Panel ───
+  chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                      backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
+  chatHeader:       { flexDirection: 'row', justifyContent: 'space-between',
+                      alignItems: 'center', backgroundColor: '#6C3FA0',
+                      paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16 },
+  chatBackBtn:      { paddingVertical: 6, paddingRight: 12 },
+  chatBackText:     { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  chatHeaderTitle:  { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold' },
+  chatContext:      { backgroundColor: '#F0E8FF', paddingHorizontal: 16, paddingVertical: 8,
+                      borderBottomWidth: 1, borderBottomColor: '#E0D0FF' },
+  chatContextText:  { fontSize: 12, color: '#6C3FA0', fontWeight: '600' },
+  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF',
+                          borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  suggestionsTitle: { fontSize: 12, color: '#888', marginBottom: 10, fontWeight: '600',
+                      textTransform: 'uppercase', letterSpacing: 0.5 },
+  suggestionsGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  suggestionChip:   { backgroundColor: '#EDE0FF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
+  suggestionText:   { fontSize: 12, color: '#6C3FA0', fontWeight: '500' },
+  chatMessages:     { flex: 1, backgroundColor: '#FAF7FF' },
+  chatMessagesContent: { padding: 16, paddingBottom: 8 },
+  chatBubble:       { maxWidth: '85%', padding: 12, borderRadius: 16, marginBottom: 12 },
+  userBubble:       { backgroundColor: '#6C3FA0', alignSelf: 'flex-end', borderBottomRightRadius: 4 },
+  aiBubble:         { backgroundColor: '#FFFFFF', alignSelf: 'flex-start', borderBottomLeftRadius: 4,
+                      elevation: 2, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4 },
+  aiLabel:          { fontSize: 10, color: '#6C3FA0', fontWeight: '700', marginBottom: 4 },
+  chatBubbleText:   { fontSize: 14, lineHeight: 22 },
+  userBubbleText:   { color: '#FFFFFF' },
+  aiBubbleText:     { color: '#333333' },
+  typingIndicator:  { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
+  typingText:       { fontSize: 13, color: '#888', fontStyle: 'italic' },
+  chatInputWrapper: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#EEE' },
+  chatInputRow:     { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10,
+                      paddingBottom: 8, gap: 8, alignItems: 'flex-end' },
+  chatInput:        { flex: 1, backgroundColor: '#F5F0FF', borderRadius: 20,
+                      paddingHorizontal: 16, paddingVertical: 10,
+                      fontSize: 14, color: '#333', maxHeight: 100, minHeight: 44 },
+  sendBtn:          { width: 44, height: 44, borderRadius: 22, backgroundColor: '#6C3FA0',
+                      justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
+  sendBtnDisabled:  { backgroundColor: '#CCC' },
+  sendBtnText:      { color: '#FFFFFF', fontSize: 18 },
+  navBarSpacer:     { height: 60, backgroundColor: '#FFFFFF' },
 });
