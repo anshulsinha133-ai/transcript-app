@@ -8,9 +8,19 @@ import {
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { summarizeTranscript, chatWithTranscripts } from '../services/api';
-import { updateSpeakerNames } from '../utils/storage';
+import { updateSpeakerNames, updateTranscriptFolder } from '../utils/storage';
 
-// ─── Dynamic speaker colors — supports up to 8 speakers ───
+// ─── Folder options ───
+const FOLDERS = ['General', 'Work', 'Personal', 'Meetings', 'Lectures'];
+const FOLDER_ICONS = {
+  General:  '🗂️',
+  Work:     '💼',
+  Personal: '👤',
+  Meetings: '👥',
+  Lectures: '🎓',
+};
+
+// ─── Dynamic speaker colors ───
 const SPEAKER_COLORS = [
   '#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF',
   '#C0392B', '#0097A7', '#795548', '#E91E63'
@@ -20,14 +30,9 @@ const SPEAKER_BG = [
   '#FDE8E8', '#E0F7FA', '#F3EDEB', '#FCE4EC'
 ];
 const getSpeakerIndex = (speaker) => {
-  // Works for "Speaker A", "Speaker B", "Anshul", "Rahul" etc.
-  const lastChar = speaker?.slice(-1)?.toUpperCase() || 'A';
-  const code     = lastChar.charCodeAt(0);
-  // If last char is a letter A-H use it directly, else hash the whole name
-  if (code >= 65 && code <= 72) {
-    return code - 65;
-  }
-  // For custom names like "Anshul", use first letter
+  const lastChar  = speaker?.slice(-1)?.toUpperCase() || 'A';
+  const code      = lastChar.charCodeAt(0);
+  if (code >= 65 && code <= 72) return code - 65;
   const firstChar = speaker?.charAt(0)?.toUpperCase() || 'A';
   return Math.abs(firstChar.charCodeAt(0) - 65) % SPEAKER_COLORS.length;
 };
@@ -43,55 +48,57 @@ export default function TranscriptScreen({ route }) {
   const [chatInput,      setChatInput]      = useState('');
   const [chatLoading,    setChatLoading]    = useState(false);
 
-  // ─── Speaker Naming State ───
+  // Speaker naming
   const [utterances,      setUtterances]      = useState(transcript.utterances || []);
   const [renamingModal,   setRenamingModal]   = useState(false);
   const [renamingSpeaker, setRenamingSpeaker] = useState('');
   const [newSpeakerName,  setNewSpeakerName]  = useState('');
   const [savingName,      setSavingName]      = useState(false);
 
+  // ✅ Folder state
+  const [currentFolder,  setCurrentFolder]   = useState(transcript.folder || 'General');
+  const [folderModal,    setFolderModal]      = useState(false);
+  const [savingFolder,   setSavingFolder]     = useState(false);
+
   const flatListRef = useRef(null);
 
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
 
-  // ─── Tap speaker badge to open rename modal ───
+  // ─── Speaker rename ───
   const handleSpeakerTap = (speaker) => {
     setRenamingSpeaker(speaker);
-    setNewSpeakerName(''); // Empty — user types new name fresh
+    setNewSpeakerName('');
     setRenamingModal(true);
   };
 
-  // ─── Save the new speaker name ───
   const saveSpeakerName = async () => {
     const trimmedName = newSpeakerName.trim();
-    if (!trimmedName) {
-      Alert.alert('Please enter a name');
-      return;
-    }
-
+    if (!trimmedName) { Alert.alert('Please enter a name'); return; }
     setSavingName(true);
-
-    // Build map: old name → new name
-    const speakerMap = { [renamingSpeaker]: trimmedName };
-
-    console.log('Saving speaker name:', speakerMap);
-    console.log('Transcript ID:', transcript.id);
-
-    const result = await updateSpeakerNames(
-      transcript.id,
-      utterances,
-      speakerMap
-    );
-
+    const result = await updateSpeakerNames(transcript.id, utterances, { [renamingSpeaker]: trimmedName });
     if (result.success) {
       setUtterances(result.utterances);
       setRenamingModal(false);
       Alert.alert('✅ Renamed!', `"${renamingSpeaker}" is now "${trimmedName}"`);
     } else {
-      Alert.alert('Error', result.error || 'Could not save name. Please try again.');
+      Alert.alert('Error', result.error || 'Could not save name.');
     }
     setSavingName(false);
+  };
+
+  // ─── Folder update ───
+  const saveFolder = async (folder) => {
+    setSavingFolder(true);
+    const result = await updateTranscriptFolder(transcript.id, folder);
+    if (result.success) {
+      setCurrentFolder(folder);
+      setFolderModal(false);
+      Alert.alert('✅ Moved!', `Recording moved to "${folder}"`);
+    } else {
+      Alert.alert('Error', 'Could not move recording. Please try again.');
+    }
+    setSavingFolder(false);
   };
 
   const copyToClipboard = async () => {
@@ -103,22 +110,11 @@ export default function TranscriptScreen({ route }) {
     try {
       let shareText = transcript.title + '\n\n';
       if (utterances.length > 0) {
-        shareText += utterances.map(u =>
-          `${u.speaker}:\n${u.englishText || u.text}`
-        ).join('\n\n');
+        shareText += utterances.map(u => `${u.speaker}:\n${u.englishText || u.text}`).join('\n\n');
       } else {
         shareText += transcript.englishText || transcript.text;
       }
       if (summary) shareText += '\n\n--- AI Summary ---\n' + summary;
-      if (transcript.actionItems?.length > 0) {
-        shareText += '\n\n--- Action Items ---\n';
-        transcript.actionItems.forEach((item, i) => {
-          shareText += `${i + 1}. ${item.task}`;
-          if (item.owner)    shareText += ` (${item.owner})`;
-          if (item.deadline) shareText += ` — by ${item.deadline}`;
-          shareText += '\n';
-        });
-      }
       await Share.share({ message: shareText, title: transcript.title });
     } catch (err) {
       Alert.alert('Error', err.message);
@@ -129,8 +125,8 @@ export default function TranscriptScreen({ route }) {
     try {
       let exportText = `${transcript.title}\n${'='.repeat(50)}\n`;
       exportText += `Date: ${formatDate(transcript.createdAt)}\n`;
-      exportText += `Duration: ${transcript.duration ? Math.round(transcript.duration / 60) + ' min' : 'N/A'}\n`;
-      exportText += `Words: ${transcript.wordCount || 0}\n\n`;
+      exportText += `Folder: ${currentFolder}\n`;
+      exportText += `Duration: ${transcript.duration ? Math.round(transcript.duration / 60) + ' min' : 'N/A'}\n\n`;
       if (summary) exportText += `AI SUMMARY\n${'-'.repeat(30)}\n${summary}\n\n`;
       if (transcript.actionItems?.length > 0) {
         exportText += `ACTION ITEMS\n${'-'.repeat(30)}\n`;
@@ -144,9 +140,7 @@ export default function TranscriptScreen({ route }) {
       }
       exportText += `TRANSCRIPT\n${'-'.repeat(30)}\n`;
       if (utterances.length > 0) {
-        utterances.forEach(u => {
-          exportText += `[${u.speaker}]: ${u.englishText || u.text}\n\n`;
-        });
+        utterances.forEach(u => { exportText += `[${u.speaker}]: ${u.englishText || u.text}\n\n`; });
       } else {
         exportText += transcript.englishText || transcript.text;
       }
@@ -164,9 +158,7 @@ export default function TranscriptScreen({ route }) {
       const result = await summarizeTranscript(transcript.englishText || transcript.text);
       if (result.success) setSummary(result.summary);
       else Alert.alert('Error', 'Could not generate summary.');
-    } catch (err) {
-      Alert.alert('Error', err.message);
-    }
+    } catch (err) { Alert.alert('Error', err.message); }
     setLoadingSummary(false);
   };
 
@@ -180,12 +172,11 @@ export default function TranscriptScreen({ route }) {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     try {
       const result = await chatWithTranscripts(question, [transcript]);
-      const aiMsg = {
+      setChatMessages(prev => [...prev, {
         role: 'ai',
         text: result.success ? result.answer : 'Sorry, could not answer that.',
         id:   (Date.now() + 1).toString(),
-      };
-      setChatMessages(prev => [...prev, aiMsg]);
+      }]);
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (err) {
       setChatMessages(prev => [...prev, {
@@ -196,8 +187,7 @@ export default function TranscriptScreen({ route }) {
   };
 
   const formatDate = (iso) => new Date(iso).toLocaleDateString('en-IN', {
-    day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit'
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
   });
 
   const formatTime = (ms) => {
@@ -214,25 +204,56 @@ export default function TranscriptScreen({ route }) {
     return '🌐 Auto';
   };
 
+  // ─── Folder Modal ───
+  const renderFolderModal = () => (
+    <Modal visible={folderModal} transparent animationType="slide"
+      onRequestClose={() => setFolderModal(false)}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBox}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>📁 Move to Folder</Text>
+            <TouchableOpacity onPress={() => setFolderModal(false)}>
+              <Text style={styles.modalCloseX}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modalSubtitle}>
+            Currently in: <Text style={{ fontWeight: 'bold' }}>
+              {FOLDER_ICONS[currentFolder]} {currentFolder}
+            </Text>
+          </Text>
+          {FOLDERS.map(folder => (
+            <TouchableOpacity
+              key={folder}
+              style={[styles.folderOption, currentFolder === folder && styles.folderOptionActive]}
+              onPress={() => saveFolder(folder)}
+              disabled={savingFolder}>
+              <Text style={styles.folderOptionIcon}>{FOLDER_ICONS[folder]}</Text>
+              <Text style={[styles.folderOptionText,
+                currentFolder === folder && styles.folderOptionTextActive]}>
+                {folder}
+              </Text>
+              {currentFolder === folder && (
+                <Text style={styles.folderOptionCheck}>✓</Text>
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    </Modal>
+  );
+
   // ─── Speaker Rename Modal ───
   const renderRenameModal = () => (
-    <Modal
-      visible={renamingModal}
-      transparent
-      animationType="slide"
+    <Modal visible={renamingModal} transparent animationType="slide"
       onRequestClose={() => setRenamingModal(false)}>
       <View style={styles.modalOverlay}>
         <View style={styles.modalBox}>
-
-          {/* Header */}
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>✏️ Rename Speaker</Text>
             <TouchableOpacity onPress={() => setRenamingModal(false)}>
               <Text style={styles.modalCloseX}>✕</Text>
             </TouchableOpacity>
           </View>
-
-          {/* Current name */}
           <View style={styles.modalCurrentRow}>
             <Text style={styles.modalCurrentLabel}>Current name:</Text>
             <View style={[styles.modalCurrentBadge,
@@ -240,43 +261,32 @@ export default function TranscriptScreen({ route }) {
               <Text style={styles.modalCurrentBadgeText}>{renamingSpeaker}</Text>
             </View>
           </View>
-
-          {/* New name input */}
           <Text style={styles.modalInputLabel}>New name:</Text>
           <TextInput
             style={styles.modalInput}
             value={newSpeakerName}
             onChangeText={setNewSpeakerName}
-            placeholder={`e.g. Anshul, Rahul, Priya...`}
+            placeholder="e.g. Anshul, Rahul, Priya..."
             placeholderTextColor="#AAA"
-            autoFocus
-            maxLength={30}
+            autoFocus maxLength={30}
             returnKeyType="done"
             onSubmitEditing={saveSpeakerName}
           />
-
           <Text style={styles.modalHint}>
             💡 All "{renamingSpeaker}" labels in this recording will be renamed
           </Text>
-
-          {/* Buttons */}
           <View style={styles.modalButtons}>
-            <TouchableOpacity
-              style={styles.modalCancelBtn}
-              onPress={() => setRenamingModal(false)}>
+            <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setRenamingModal(false)}>
               <Text style={styles.modalCancelText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.modalSaveBtn, savingName && { opacity: 0.6 }]}
-              onPress={saveSpeakerName}
-              disabled={savingName}>
+              onPress={saveSpeakerName} disabled={savingName}>
               {savingName
                 ? <ActivityIndicator size="small" color="#FFF" />
-                : <Text style={styles.modalSaveText}>✅ Save Name</Text>
-              }
+                : <Text style={styles.modalSaveText}>✅ Save Name</Text>}
             </TouchableOpacity>
           </View>
-
         </View>
       </View>
     </Modal>
@@ -317,9 +327,11 @@ export default function TranscriptScreen({ route }) {
         style={styles.chatMessages}
         contentContainerStyle={styles.chatMessagesContent}
         renderItem={({ item }) => (
-          <View style={[styles.chatBubble, item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
+          <View style={[styles.chatBubble,
+            item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
             {item.role === 'ai' && <Text style={styles.aiLabel}>🤖 VoxNote AI</Text>}
-            <Text style={[styles.chatBubbleText, item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
+            <Text style={[styles.chatBubbleText,
+              item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
               {item.text}
             </Text>
           </View>
@@ -340,13 +352,11 @@ export default function TranscriptScreen({ route }) {
               placeholderTextColor="#888"
               value={chatInput}
               onChangeText={setChatInput}
-              multiline
-              maxLength={500}
+              multiline maxLength={500}
             />
             <TouchableOpacity
               style={[styles.sendBtn, (!chatInput.trim() || chatLoading) && styles.sendBtnDisabled]}
-              onPress={sendChatMessage}
-              disabled={!chatInput.trim() || chatLoading}>
+              onPress={sendChatMessage} disabled={!chatInput.trim() || chatLoading}>
               <Text style={styles.sendBtnText}>➤</Text>
             </TouchableOpacity>
           </View>
@@ -358,9 +368,8 @@ export default function TranscriptScreen({ route }) {
 
   return (
     <SafeAreaView style={styles.container}>
-
-      {/* Modals */}
       {renderRenameModal()}
+      {renderFolderModal()}
       {showChat && renderChatPanel()}
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -373,6 +382,13 @@ export default function TranscriptScreen({ route }) {
             <Text style={styles.langBadgeText}>{getLangBadge()}</Text>
           </View>
         </View>
+
+        {/* ✅ Folder Badge */}
+        <TouchableOpacity style={styles.folderBadge} onPress={() => setFolderModal(true)}>
+          <Text style={styles.folderBadgeIcon}>{FOLDER_ICONS[currentFolder]}</Text>
+          <Text style={styles.folderBadgeText}>{currentFolder}</Text>
+          <Text style={styles.folderBadgeChange}>Change →</Text>
+        </TouchableOpacity>
 
         {/* Action Buttons */}
         <View style={styles.actions}>
@@ -406,15 +422,13 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.exportBtnText}>Export Full Transcript</Text>
         </TouchableOpacity>
 
-        {/* Loading Summary */}
+        {/* Summary */}
         {loadingSummary && (
           <View style={styles.loadingBox}>
             <ActivityIndicator color="#1A56A0" />
             <Text style={styles.loadingText}>Generating AI summary...</Text>
           </View>
         )}
-
-        {/* Summary */}
         {summary && (
           <View style={styles.summaryBox}>
             <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
@@ -451,7 +465,7 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* Translation Box */}
+        {/* Translation */}
         {hasTranslation && (
           <View style={styles.translationBox}>
             <View style={styles.translationHeader}>
@@ -470,41 +484,32 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* ─── Speaker Transcript with Rename ─── */}
+        {/* Speaker Transcript */}
         {utterances.length > 0 ? (
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>🎙 Speaker Transcript</Text>
-
-            {/* Hint */}
             <View style={styles.renameHintBox}>
               <Text style={styles.renameHintText}>✏️ Tap any speaker name to rename</Text>
             </View>
-
-            {/* Speaker Legend — tap to rename */}
             <View style={styles.legendRow}>
               {[...new Set(utterances.map(u => u.speaker))].map(speaker => (
                 <TouchableOpacity
                   key={speaker}
                   style={[styles.legendBadge,
                     { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(speaker)] }]}
-                  onPress={() => handleSpeakerTap(speaker)}
-                  activeOpacity={0.7}>
+                  onPress={() => handleSpeakerTap(speaker)} activeOpacity={0.7}>
                   <Text style={styles.legendText}>{speaker}  ✏️</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
-            {/* Utterances */}
             {utterances.map((utterance, index) => {
               const idx = getSpeakerIndex(utterance.speaker);
               return (
                 <View key={index} style={[styles.utteranceBox, { backgroundColor: SPEAKER_BG[idx] }]}>
                   <View style={styles.speakerRow}>
-                    {/* Tap speaker badge to rename */}
                     <TouchableOpacity
                       style={[styles.speakerBadge, { backgroundColor: SPEAKER_COLORS[idx] }]}
-                      onPress={() => handleSpeakerTap(utterance.speaker)}
-                      activeOpacity={0.7}>
+                      onPress={() => handleSpeakerTap(utterance.speaker)} activeOpacity={0.7}>
                       <Text style={styles.speakerBadgeText}>{utterance.speaker}  ✏️</Text>
                     </TouchableOpacity>
                     <Text style={styles.utteranceTime}>
@@ -531,7 +536,7 @@ export default function TranscriptScreen({ route }) {
                 </TouchableOpacity>
                 {showOriginal && (
                   <View style={styles.originalBox}>
-                    <Text style={styles.originalLabel}>Original (Roman script):</Text>
+                    <Text style={styles.originalLabel}>Original:</Text>
                     <Text style={styles.originalText}>{transcript.originalText || transcript.text}</Text>
                   </View>
                 )}
@@ -539,7 +544,6 @@ export default function TranscriptScreen({ route }) {
             )}
           </View>
         )}
-
       </ScrollView>
     </SafeAreaView>
   );
@@ -550,10 +554,19 @@ const styles = StyleSheet.create({
   scroll:       { padding: 20, paddingBottom: 40 },
   title:        { fontSize: 20, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 6 },
   metaRow:      { flexDirection: 'row', justifyContent: 'space-between',
-                  alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 },
+                  alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 },
   meta:         { fontSize: 12, color: '#888' },
   langBadge:    { backgroundColor: '#E8F0FC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   langBadgeText:{ fontSize: 11, color: '#1A56A0', fontWeight: '600' },
+
+  // ✅ Folder Badge
+  folderBadge:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF',
+                       borderWidth: 1, borderColor: '#D0DAF8', borderRadius: 10,
+                       paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 6 },
+  folderBadgeIcon:   { fontSize: 16 },
+  folderBadgeText:   { fontSize: 13, color: '#1A56A0', fontWeight: '600', flex: 1 },
+  folderBadgeChange: { fontSize: 12, color: '#888' },
+
   actions:      { flexDirection: 'row', gap: 10, marginBottom: 10 },
   btn:          { flex: 1, backgroundColor: '#1A56A0', padding: 10, borderRadius: 10, alignItems: 'center' },
   btnGreen:     { backgroundColor: '#1A7A4A' },
@@ -577,7 +590,6 @@ const styles = StyleSheet.create({
   loadingBox:   { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16,
                   backgroundColor: '#EFF4FF', borderRadius: 10, marginBottom: 16 },
   loadingText:  { color: '#1A56A0', fontSize: 13 },
-
   summaryBox:   { backgroundColor: '#D6F0E2', padding: 16, borderRadius: 12,
                   marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
   summaryTitle: { fontSize: 14, fontWeight: 'bold', color: '#1A7A4A', marginBottom: 10 },
@@ -611,11 +623,9 @@ const styles = StyleSheet.create({
   transcriptBox:    { backgroundColor: '#fff', padding: 16, borderRadius: 12, marginBottom: 16 },
   transcriptLabel:  { fontSize: 14, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 8 },
   transcriptText:   { fontSize: 15, color: '#333', lineHeight: 28 },
-
   renameHintBox:    { backgroundColor: '#FFF3CD', padding: 8, borderRadius: 8,
                       marginBottom: 12, alignItems: 'center' },
   renameHintText:   { fontSize: 12, color: '#856404', fontWeight: '500' },
-
   legendRow:        { flexDirection: 'row', gap: 8, marginBottom: 16, flexWrap: 'wrap' },
   legendBadge:      { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
   legendText:       { color: '#fff', fontSize: 13, fontWeight: 'bold' },
@@ -627,15 +637,26 @@ const styles = StyleSheet.create({
   utteranceText:    { fontSize: 15, color: '#333', lineHeight: 26 },
   utteranceOriginal:{ fontSize: 12, color: '#888', lineHeight: 20, marginTop: 6, fontStyle: 'italic' },
 
-  // ─── Rename Modal ───
-  modalOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-                      justifyContent: 'flex-end' },
+  // ─── Modals ───
+  modalOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBox:         { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20,
                       borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
   modalHeader:      { flexDirection: 'row', justifyContent: 'space-between',
                       alignItems: 'center', marginBottom: 16 },
   modalTitle:       { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
   modalCloseX:      { fontSize: 22, color: '#888', padding: 4 },
+  modalSubtitle:    { fontSize: 13, color: '#666', marginBottom: 16 },
+
+  // Folder options
+  folderOption:     { flexDirection: 'row', alignItems: 'center', padding: 14,
+                      borderRadius: 12, marginBottom: 8, backgroundColor: '#F5F7FA', gap: 12 },
+  folderOptionActive:{ backgroundColor: '#E8F0FC', borderWidth: 2, borderColor: '#1A56A0' },
+  folderOptionIcon: { fontSize: 20 },
+  folderOptionText: { flex: 1, fontSize: 15, color: '#333', fontWeight: '500' },
+  folderOptionTextActive: { color: '#1A56A0', fontWeight: '700' },
+  folderOptionCheck:{ fontSize: 18, color: '#1A56A0', fontWeight: 'bold' },
+
+  // Speaker rename modal
   modalCurrentRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
   modalCurrentLabel:{ fontSize: 13, color: '#666' },
   modalCurrentBadge:{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
@@ -653,20 +674,18 @@ const styles = StyleSheet.create({
                       backgroundColor: '#1A56A0', alignItems: 'center' },
   modalSaveText:    { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
 
-  // ─── Chat Panel ───
+  // ─── Chat ───
   chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                       backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
-  chatHeader:       { flexDirection: 'row', justifyContent: 'space-between',
-                      alignItems: 'center', backgroundColor: '#6C3FA0',
-                      paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16 },
+  chatHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+                      backgroundColor: '#6C3FA0', paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16 },
   chatBackBtn:      { paddingVertical: 6, paddingRight: 12 },
   chatBackText:     { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   chatHeaderTitle:  { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold' },
   chatContext:      { backgroundColor: '#F0E8FF', paddingHorizontal: 16, paddingVertical: 8,
                       borderBottomWidth: 1, borderBottomColor: '#E0D0FF' },
   chatContextText:  { fontSize: 12, color: '#6C3FA0', fontWeight: '600' },
-  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF',
-                          borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF', borderBottomWidth: 1, borderBottomColor: '#EEE' },
   suggestionsTitle: { fontSize: 12, color: '#888', marginBottom: 10, fontWeight: '600',
                       textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionsGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

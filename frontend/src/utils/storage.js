@@ -1,7 +1,5 @@
 import { supabase } from '../supabase';
 
-// ✅ FIX: Now returns { success, id } instead of true/false
-// This gives us the real Supabase UUID to use for speaker renaming
 export const saveTranscript = async (transcriptObj) => {
   try {
     const { data: { user } } = await supabase.auth.getUser();
@@ -23,14 +21,15 @@ export const saveTranscript = async (transcriptObj) => {
         auto_summary: transcriptObj.autoSummary  || null,
         action_items: transcriptObj.actionItems  || null,
         mode:         transcriptObj.mode         || 'en',
+        folder:       transcriptObj.folder       || 'General', // ✅ NEW
       })
-      .select('id')   // ✅ Returns the real Supabase UUID
+      .select('id')
       .single();
 
     if (error) throw error;
 
     console.log('Transcript saved with UUID:', data.id);
-    return { success: true, id: data.id }; // ✅ Returns real UUID
+    return { success: true, id: data.id };
 
   } catch (err) {
     console.error('Save error:', err);
@@ -48,7 +47,7 @@ export const getAllTranscripts = async () => {
     if (error) throw error;
 
     return data.map(t => ({
-      id:           t.id,           // ✅ Real Supabase UUID
+      id:           t.id,
       title:        t.title,
       text:         t.text,
       duration:     t.duration,
@@ -60,6 +59,7 @@ export const getAllTranscripts = async () => {
       originalText: t.original_text|| null,
       autoSummary:  t.auto_summary || null,
       actionItems:  t.action_items || null,
+      folder:       t.folder       || 'General', // ✅ NEW
       mode:         t.mode         || 'en',
       createdAt:    t.created_at,
     }));
@@ -84,44 +84,28 @@ export const deleteTranscript = async (id) => {
   }
 };
 
-// ─── Update speaker names in a transcript ───
-// speakerMap example: { 'Speaker A': 'Anshul', 'Speaker B': 'Rahul' }
+// ─── Update speaker names ───
 export const updateSpeakerNames = async (transcriptId, utterances, speakerMap) => {
   try {
     console.log('updateSpeakerNames called');
     console.log('transcriptId:', transcriptId);
     console.log('speakerMap:', speakerMap);
-    console.log('utterances count:', utterances?.length);
 
-    if (!transcriptId) {
-      throw new Error('No transcript ID provided');
-    }
+    if (!transcriptId) throw new Error('No transcript ID provided');
 
-    // Apply new names to all utterances
     const updatedUtterances = utterances.map(u => ({
       ...u,
-      speaker: speakerMap[u.speaker] !== undefined
-        ? speakerMap[u.speaker]
-        : u.speaker,
+      speaker: speakerMap[u.speaker] !== undefined ? speakerMap[u.speaker] : u.speaker,
     }));
 
-    console.log('Updated utterances sample:', updatedUtterances[0]);
-
-    // Save to Supabase using real UUID
     const { data, error } = await supabase
       .from('transcripts')
       .update({ utterances: updatedUtterances })
       .eq('id', transcriptId)
       .select('id, utterances');
 
-    console.log('Supabase update result - data:', data);
-    console.log('Supabase update result - error:', error);
-
     if (error) throw error;
-
-    if (!data || data.length === 0) {
-      throw new Error('No rows updated — transcript ID may not match');
-    }
+    if (!data || data.length === 0) throw new Error('No rows updated');
 
     return { success: true, utterances: updatedUtterances };
   } catch (err) {
@@ -130,7 +114,24 @@ export const updateSpeakerNames = async (transcriptId, utterances, speakerMap) =
   }
 };
 
-// ✅ FIX: id is null — real UUID comes from Supabase after save
+// ─── NEW: Update folder for a transcript ───
+export const updateTranscriptFolder = async (transcriptId, folder) => {
+  try {
+    console.log('Updating folder:', transcriptId, '→', folder);
+
+    const { error } = await supabase
+      .from('transcripts')
+      .update({ folder })
+      .eq('id', transcriptId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err) {
+    console.error('updateTranscriptFolder error:', err.message);
+    return { success: false, error: err.message };
+  }
+};
+
 export const createTranscriptObj = (
   title,
   text,
@@ -142,9 +143,10 @@ export const createTranscriptObj = (
   originalText = null,
   autoSummary  = null,
   actionItems  = null,
-  mode         = 'en'
+  mode         = 'en',
+  folder       = 'General' // ✅ NEW
 ) => ({
-  id:           null,   // ✅ null — will be replaced by real Supabase UUID after save
+  id:           null,
   title:        title,
   text:         text,
   duration:     duration,
@@ -155,6 +157,7 @@ export const createTranscriptObj = (
   originalText: originalText,
   autoSummary:  autoSummary,
   actionItems:  actionItems,
+  folder:       folder,       // ✅ NEW
   mode:         mode,
   createdAt:    new Date().toISOString(),
   wordCount:    text ? text.split(' ').length : 0,
