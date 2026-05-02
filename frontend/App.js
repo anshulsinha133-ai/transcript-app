@@ -3,12 +3,13 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { ActivityIndicator, View, TouchableOpacity, Text } from 'react-native';
 import { supabase } from './src/supabase';
-import LoginScreen      from './src/screens/LoginScreen';
-import HomeScreen       from './src/screens/HomeScreen';
-import RecordScreen     from './src/screens/RecordScreen';
-import UploadScreen     from './src/screens/UploadScreen';
-import TranscriptScreen from './src/screens/TranscriptScreen';
-import LiveScreen       from './src/screens/LiveScreen';   // ✅ NEW
+import LoginScreen        from './src/screens/LoginScreen';
+import HomeScreen         from './src/screens/HomeScreen';
+import RecordScreen       from './src/screens/RecordScreen';
+import UploadScreen       from './src/screens/UploadScreen';
+import TranscriptScreen   from './src/screens/TranscriptScreen';
+import LiveScreen         from './src/screens/LiveScreen';
+import GlobalChatScreen   from './src/screens/GlobalChatScreen'; // ✅ NEW
 
 const Stack = createStackNavigator();
 
@@ -79,6 +80,11 @@ export default function App() {
                 name="Transcript"
                 component={TranscriptScreen}
                 options={{ title: 'Transcript' }}
+              />
+              <Stack.Screen
+                name="GlobalChat"
+                component={GlobalChatScreen}
+                options={{ headerShown: false }} // ✅ Has its own header
               />
             </>
           : <Stack.Screen

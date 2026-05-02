@@ -91,7 +91,6 @@ export default function HomeScreen({ navigation }) {
     };
     loadTranscripts();
 
-    // ✅ Check for pending job on every screen focus
     const checkPending = async () => {
       const pending = await getPendingJob();
       setPendingJob(pending);
@@ -177,12 +176,9 @@ export default function HomeScreen({ navigation }) {
           setPendingJob(null);
           setResuming(false);
           setResumeStatus('');
-
-          // Reload transcripts
           const data = await getAllTranscripts();
           setTranscripts(data);
           applyFilters(data, searchQuery, activeFolder);
-
           Alert.alert('✅ Recovered!', `"${title}" has been saved successfully.`);
         } else {
           setResuming(false);
@@ -449,6 +445,18 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* ✅ Global AI Chat Button */}
+      <TouchableOpacity
+        style={styles.globalChatBtn}
+        onPress={() => navigation.navigate('GlobalChat')}>
+        <Text style={styles.globalChatIcon}>💬</Text>
+        <View style={styles.globalChatTextWrapper}>
+          <Text style={styles.globalChatTitle}>Ask AI across all recordings</Text>
+          <Text style={styles.globalChatSub}>What was discussed? Any action items?</Text>
+        </View>
+        <Text style={styles.globalChatArrow}>›</Text>
+      </TouchableOpacity>
+
       {/* Content */}
       {filtered.length === 0 && searchQuery.length > 0 ? (
         <View style={styles.empty}>
@@ -495,7 +503,7 @@ const styles = StyleSheet.create({
                    backgroundColor: '#1A6FC4', justifyContent: 'center', alignItems: 'center' },
   headerMicIcon: { fontSize: 20 },
 
-  // ✅ Resume Banner
+  // Resume Banner
   resumeBanner:      { backgroundColor: '#E65100', flexDirection: 'row', alignItems: 'center',
                        paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
   resumeIcon:        { fontSize: 20 },
@@ -536,6 +544,16 @@ const styles = StyleSheet.create({
   btnSecondary:     { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#1A56A0' },
   btnText:          { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   btnTextSecondary: { color: '#1A56A0' },
+
+  // ✅ Global AI Chat Button
+  globalChatBtn:         { flexDirection: 'row', alignItems: 'center',
+                           backgroundColor: '#6C3FA0', marginHorizontal: 16,
+                           marginBottom: 8, padding: 14, borderRadius: 12, gap: 12 },
+  globalChatIcon:        { fontSize: 22 },
+  globalChatTextWrapper: { flex: 1 },
+  globalChatTitle:       { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  globalChatSub:         { color: '#DDD0FF', fontSize: 11, marginTop: 2 },
+  globalChatArrow:       { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
 
   // List
   list:          { paddingHorizontal: 16, paddingBottom: 30 },
