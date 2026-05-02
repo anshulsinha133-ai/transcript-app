@@ -3,12 +3,12 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { ActivityIndicator, View, TouchableOpacity, Text } from 'react-native';
 import { supabase } from './src/supabase';
-
 import LoginScreen      from './src/screens/LoginScreen';
 import HomeScreen       from './src/screens/HomeScreen';
 import RecordScreen     from './src/screens/RecordScreen';
 import UploadScreen     from './src/screens/UploadScreen';
 import TranscriptScreen from './src/screens/TranscriptScreen';
+import LiveScreen       from './src/screens/LiveScreen';   // ✅ NEW
 
 const Stack = createStackNavigator();
 
@@ -17,24 +17,20 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is already logged in
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
     });
 
-    // Listen for login/logout changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setSession(session);
         setLoading(false);
       }
     );
-
     return () => subscription.unsubscribe();
   }, []);
 
-  // Show loading spinner while checking login status
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -57,15 +53,33 @@ export default function App() {
                 name="Home"
                 component={HomeScreen}
                 options={{
-                  title: 'Transcript AI',
-                  headerRight: () => (
-                    <LogoutButton />
-                  )
+                  title: 'VoxNote',
+                  headerRight: () => <LogoutButton />
                 }}
               />
-              <Stack.Screen name="Record"     component={RecordScreen}     options={{ title: 'New Recording' }} />
-              <Stack.Screen name="Upload"     component={UploadScreen}     options={{ title: 'Upload Audio' }} />
-              <Stack.Screen name="Transcript" component={TranscriptScreen} options={{ title: 'Transcript' }} />
+              <Stack.Screen
+                name="Record"
+                component={RecordScreen}
+                options={{ title: 'New Recording' }}
+              />
+              <Stack.Screen
+                name="Live"
+                component={LiveScreen}
+                options={{
+                  title: '🔴 Live Transcription',
+                  headerStyle: { backgroundColor: '#C0392B' },
+                }}
+              />
+              <Stack.Screen
+                name="Upload"
+                component={UploadScreen}
+                options={{ title: 'Upload Audio' }}
+              />
+              <Stack.Screen
+                name="Transcript"
+                component={TranscriptScreen}
+                options={{ title: 'Transcript' }}
+              />
             </>
           : <Stack.Screen
               name="Login"

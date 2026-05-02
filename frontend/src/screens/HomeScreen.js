@@ -299,15 +299,20 @@ export default function HomeScreen({ navigation }) {
 
       {/* Action Buttons */}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Record')}>
-          <Text style={styles.btnText}>🎙 Record</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.btn, styles.btnSecondary]}
-          onPress={() => navigation.navigate('Upload')}>
-          <Text style={[styles.btnText, styles.btnTextSecondary]}>📁 Upload</Text>
-        </TouchableOpacity>
-      </View>
+  <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Record')}>
+    <Text style={styles.btnText}>🎙 Record</Text>
+  </TouchableOpacity>
+  <TouchableOpacity
+    style={[styles.btn, { backgroundColor: '#C0392B' }]}
+    onPress={() => navigation.navigate('Live')}>
+    <Text style={styles.btnText}>🔴 Live</Text>
+  </TouchableOpacity>
+  <TouchableOpacity
+    style={[styles.btn, styles.btnSecondary]}
+    onPress={() => navigation.navigate('Upload')}>
+    <Text style={[styles.btnText, styles.btnTextSecondary]}>📁 Upload</Text>
+  </TouchableOpacity>
+</View>
 
       {/* Content */}
       {filtered.length === 0 && searchQuery.length > 0 ? (

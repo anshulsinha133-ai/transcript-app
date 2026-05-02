@@ -109,7 +109,9 @@ export default function RecordScreen({ navigation }) {
             result.utterances?.map(u => u.englishText || u.text).join(' ') ||
             'Recording saved';
 
-          const title = 'Recording ' + new Date().toLocaleDateString('en-IN');
+          // ✅ SMART TITLE — use AI title or fallback to date
+          const title = result.smartTitle ||
+            'Recording ' + new Date().toLocaleDateString('en-IN');
 
           // ✅ Build transcript object — id starts as null
           const obj = {
@@ -120,18 +122,18 @@ export default function RecordScreen({ navigation }) {
             originalText: result.text,
             englishText:  result.englishText  || null,
             autoSummary:  result.autoSummary  || null,
-            actionItems:  result.actionItems  || [],  // ✅ FIX: actionItems included
+            actionItems:  result.actionItems  || [],
             detectedLang: result.detectedLang || 'en',
             mode:         result.detectedLang !== 'en' ? 'auto' : 'en',
           };
 
           setStatusText('Saving transcript...');
 
-          // ✅ FIX: saveTranscript now returns real Supabase UUID
+          // ✅ saveTranscript returns real Supabase UUID
           const saved = await saveTranscript(obj);
 
           if (saved && saved.success) {
-            obj.id = saved.id; // ✅ Replace null with real Supabase UUID
+            obj.id = saved.id;
             console.log('Transcript saved with real UUID:', obj.id);
             setStatusText('Transcript saved! ✅');
             setTimeout(() => navigation.navigate('Home'), 2000);

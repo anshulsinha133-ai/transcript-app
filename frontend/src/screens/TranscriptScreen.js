@@ -4,7 +4,7 @@ import {
   StyleSheet, SafeAreaView, Alert,
   ActivityIndicator, Share, TextInput,
   KeyboardAvoidingView, Platform, FlatList,
-  StatusBar, Modal
+  StatusBar, Modal, Keyboard
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { summarizeTranscript, chatWithTranscripts } from '../services/api';
@@ -55,12 +55,13 @@ export default function TranscriptScreen({ route }) {
   const [newSpeakerName,  setNewSpeakerName]  = useState('');
   const [savingName,      setSavingName]      = useState(false);
 
-  // ✅ Folder state
-  const [currentFolder,  setCurrentFolder]   = useState(transcript.folder || 'General');
-  const [folderModal,    setFolderModal]      = useState(false);
-  const [savingFolder,   setSavingFolder]     = useState(false);
+  // Folder state
+  const [currentFolder, setCurrentFolder] = useState(transcript.folder || 'General');
+  const [folderModal,   setFolderModal]   = useState(false);
+  const [savingFolder,  setSavingFolder]  = useState(false);
 
-  const flatListRef = useRef(null);
+  const flatListRef  = useRef(null);
+  const inputRef     = useRef(null);
 
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
@@ -162,9 +163,11 @@ export default function TranscriptScreen({ route }) {
     setLoadingSummary(false);
   };
 
+  // ─── Chat ───
   const sendChatMessage = async () => {
     const question = chatInput.trim();
     if (!question || chatLoading) return;
+    Keyboard.dismiss();
     const userMsg = { role: 'user', text: question, id: Date.now().toString() };
     setChatMessages(prev => [...prev, userMsg]);
     setChatInput('');
@@ -232,9 +235,7 @@ export default function TranscriptScreen({ route }) {
                 currentFolder === folder && styles.folderOptionTextActive]}>
                 {folder}
               </Text>
-              {currentFolder === folder && (
-                <Text style={styles.folderOptionCheck}>✓</Text>
-              )}
+              {currentFolder === folder && <Text style={styles.folderOptionCheck}>✓</Text>}
             </TouchableOpacity>
           ))}
         </View>
@@ -293,19 +294,33 @@ export default function TranscriptScreen({ route }) {
   );
 
   // ─── Chat Panel ───
+  // ✅ FIX: Wrap entire chat panel in KeyboardAvoidingView for Samsung
   const renderChatPanel = () => (
-    <View style={styles.chatOverlay}>
+    <KeyboardAvoidingView
+      style={styles.chatOverlay}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'android' ? 0 : 0}>
+
       <StatusBar barStyle="light-content" backgroundColor="#6C3FA0" />
+
+      {/* Header */}
       <View style={styles.chatHeader}>
-        <TouchableOpacity onPress={() => setShowChat(false)} style={styles.chatBackBtn}>
+        <TouchableOpacity onPress={() => {
+          Keyboard.dismiss();
+          setShowChat(false);
+        }} style={styles.chatBackBtn}>
           <Text style={styles.chatBackText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.chatHeaderTitle}>💬 Ask AI</Text>
         <View style={{ width: 60 }} />
       </View>
+
+      {/* Context */}
       <View style={styles.chatContext}>
         <Text style={styles.chatContextText} numberOfLines={1}>📝 {transcript.title}</Text>
       </View>
+
+      {/* Suggestions */}
       {chatMessages.length === 0 && (
         <View style={styles.suggestionsContainer}>
           <Text style={styles.suggestionsTitle}>Try asking:</Text>
@@ -313,19 +328,26 @@ export default function TranscriptScreen({ route }) {
             {['What were the main topics?', 'What action items were mentioned?',
               'Who said what about the project?', 'What decisions were made?'
             ].map((q, i) => (
-              <TouchableOpacity key={i} style={styles.suggestionChip} onPress={() => setChatInput(q)}>
+              <TouchableOpacity key={i} style={styles.suggestionChip}
+                onPress={() => {
+                  setChatInput(q);
+                  setTimeout(() => inputRef.current?.focus(), 100);
+                }}>
                 <Text style={styles.suggestionText}>{q}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </View>
       )}
+
+      {/* Messages */}
       <FlatList
         ref={flatListRef}
         data={chatMessages}
         keyExtractor={item => item.id}
         style={styles.chatMessages}
         contentContainerStyle={styles.chatMessagesContent}
+        keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => (
           <View style={[styles.chatBubble,
             item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
@@ -343,27 +365,39 @@ export default function TranscriptScreen({ route }) {
           </View>
         ) : null}
       />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <View style={styles.chatInputWrapper}>
-          <View style={styles.chatInputRow}>
-            <TextInput
-              style={styles.chatInput}
-              placeholder="Ask anything about this recording..."
-              placeholderTextColor="#888"
-              value={chatInput}
-              onChangeText={setChatInput}
-              multiline maxLength={500}
-            />
-            <TouchableOpacity
-              style={[styles.sendBtn, (!chatInput.trim() || chatLoading) && styles.sendBtnDisabled]}
-              onPress={sendChatMessage} disabled={!chatInput.trim() || chatLoading}>
-              <Text style={styles.sendBtnText}>➤</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.navBarSpacer} />
+
+      {/* ✅ FIX: Input row — no more nested KeyboardAvoidingView */}
+      <View style={styles.chatInputWrapper}>
+        <View style={styles.chatInputRow}>
+          <TextInput
+            ref={inputRef}
+            style={styles.chatInput}
+            placeholder="Ask anything about this recording..."
+            placeholderTextColor="#888"
+            value={chatInput}
+            onChangeText={setChatInput}
+            multiline
+            maxLength={500}
+            returnKeyType="send"
+            blurOnSubmit={false}
+            onSubmitEditing={sendChatMessage}
+            onFocus={() => {
+              // Scroll to bottom when keyboard opens
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 300);
+            }}
+          />
+          <TouchableOpacity
+            style={[styles.sendBtn, (!chatInput.trim() || chatLoading) && styles.sendBtnDisabled]}
+            onPress={sendChatMessage}
+            disabled={!chatInput.trim() || chatLoading}>
+            <Text style={styles.sendBtnText}>➤</Text>
+          </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
-    </View>
+        {/* ✅ Samsung nav bar spacer */}
+        <View style={styles.navBarSpacer} />
+      </View>
+
+    </KeyboardAvoidingView>
   );
 
   return (
@@ -374,7 +408,6 @@ export default function TranscriptScreen({ route }) {
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
-        {/* Title & Meta */}
         <Text style={styles.title}>{transcript.title}</Text>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{transcript.wordCount} words  •  {formatDate(transcript.createdAt)}</Text>
@@ -383,7 +416,7 @@ export default function TranscriptScreen({ route }) {
           </View>
         </View>
 
-        {/* ✅ Folder Badge */}
+        {/* Folder Badge */}
         <TouchableOpacity style={styles.folderBadge} onPress={() => setFolderModal(true)}>
           <Text style={styles.folderBadgeIcon}>{FOLDER_ICONS[currentFolder]}</Text>
           <Text style={styles.folderBadgeText}>{currentFolder}</Text>
@@ -559,7 +592,6 @@ const styles = StyleSheet.create({
   langBadge:    { backgroundColor: '#E8F0FC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   langBadgeText:{ fontSize: 11, color: '#1A56A0', fontWeight: '600' },
 
-  // ✅ Folder Badge
   folderBadge:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF',
                        borderWidth: 1, borderColor: '#D0DAF8', borderRadius: 10,
                        paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 6 },
@@ -646,8 +678,6 @@ const styles = StyleSheet.create({
   modalTitle:       { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
   modalCloseX:      { fontSize: 22, color: '#888', padding: 4 },
   modalSubtitle:    { fontSize: 13, color: '#666', marginBottom: 16 },
-
-  // Folder options
   folderOption:     { flexDirection: 'row', alignItems: 'center', padding: 14,
                       borderRadius: 12, marginBottom: 8, backgroundColor: '#F5F7FA', gap: 12 },
   folderOptionActive:{ backgroundColor: '#E8F0FC', borderWidth: 2, borderColor: '#1A56A0' },
@@ -655,8 +685,6 @@ const styles = StyleSheet.create({
   folderOptionText: { flex: 1, fontSize: 15, color: '#333', fontWeight: '500' },
   folderOptionTextActive: { color: '#1A56A0', fontWeight: '700' },
   folderOptionCheck:{ fontSize: 18, color: '#1A56A0', fontWeight: 'bold' },
-
-  // Speaker rename modal
   modalCurrentRow:  { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
   modalCurrentLabel:{ fontSize: 13, color: '#666' },
   modalCurrentBadge:{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
@@ -675,6 +703,7 @@ const styles = StyleSheet.create({
   modalSaveText:    { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
 
   // ─── Chat ───
+  // ✅ FIX: chatOverlay is now the KeyboardAvoidingView itself
   chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                       backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
   chatHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -685,7 +714,8 @@ const styles = StyleSheet.create({
   chatContext:      { backgroundColor: '#F0E8FF', paddingHorizontal: 16, paddingVertical: 8,
                       borderBottomWidth: 1, borderBottomColor: '#E0D0FF' },
   chatContextText:  { fontSize: 12, color: '#6C3FA0', fontWeight: '600' },
-  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF', borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF',
+                          borderBottomWidth: 1, borderBottomColor: '#EEE' },
   suggestionsTitle: { fontSize: 12, color: '#888', marginBottom: 10, fontWeight: '600',
                       textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionsGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -703,6 +733,8 @@ const styles = StyleSheet.create({
   aiBubbleText:     { color: '#333333' },
   typingIndicator:  { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
   typingText:       { fontSize: 13, color: '#888', fontStyle: 'italic' },
+
+  // ✅ FIX: Input wrapper — clean, no nested KeyboardAvoidingView
   chatInputWrapper: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#EEE' },
   chatInputRow:     { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10,
                       paddingBottom: 8, gap: 8, alignItems: 'flex-end' },
@@ -713,5 +745,6 @@ const styles = StyleSheet.create({
                       justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
   sendBtnDisabled:  { backgroundColor: '#CCC' },
   sendBtnText:      { color: '#FFFFFF', fontSize: 18 },
-  navBarSpacer:     { height: 60, backgroundColor: '#FFFFFF' },
+  // ✅ Smaller spacer — keyboard handles the main offset now
+  navBarSpacer:     { height: 20, backgroundColor: '#FFFFFF' },
 });

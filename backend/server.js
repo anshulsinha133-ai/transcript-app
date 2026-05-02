@@ -26,7 +26,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 }, // ✅ 500MB — handles 1+ hour recordings
+  limits: { fileSize: 500 * 1024 * 1024 },
   fileFilter: (req, file, cb) => { cb(null, true); }
 });
 
@@ -68,7 +68,7 @@ app.get('/realtime-token', async (req, res) => {
       throw new Error(`Token error: ${response.status} ${responseText}`);
     }
 
-    const data  = JSON.parse(responseText);
+    const data = JSON.parse(responseText);
     console.log('Token generated successfully');
     res.json({ success: true, token: data.token });
 
@@ -153,6 +153,7 @@ Rules:
 });
 
 // ─── HELPERS ───
+
 const translateToEnglish = async (text) => {
   try {
     const completion = await openai.chat.completions.create({
@@ -182,7 +183,6 @@ Rules:
 
 const generateSummary = async (text) => {
   try {
-    // For long transcripts, use only first 8000 chars to avoid token limits
     const truncated = text.length > 8000 ? text.substring(0, 8000) + '...' : text;
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -240,6 +240,34 @@ Rules:
   }
 };
 
+// ─── Helper: Generate smart title ───
+const generateTitle = async (text, detectedLang) => {
+  try {
+    const truncated = text.length > 3000 ? text.substring(0, 3000) + '...' : text;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a title generator for meeting/conversation transcripts.
+Rules:
+1. Generate a SHORT, descriptive title in English only (even if transcript is Hindi/Marathi)
+2. Format: "[Topic] — [Key Context]"
+3. Examples: "Team Standup — Sprint Planning", "Client Call — Budget Discussion", "Interview — Frontend Developer"
+4. Max 6 words total
+5. Return ONLY the title, nothing else — no quotes, no punctuation at end`
+        },
+        { role: 'user', content: 'Generate a title for this transcript:\n\n' + truncated }
+      ],
+      max_tokens: 30,
+    });
+    return completion.choices[0].message.content.trim();
+  } catch (err) {
+    console.error('Title generation error:', err.message);
+    return null;
+  }
+};
+
 // ─── Helper: Process completed transcript ───
 const processTranscript = async (transcript) => {
   const rawText      = transcript.text || '';
@@ -286,11 +314,15 @@ const processTranscript = async (transcript) => {
   console.log('Extracting action items...');
   const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
 
+  console.log('Generating smart title...');
+  const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
+
   return {
     success:      true,
     status:       'completed',
     text:         rawText,
-    englishText:  englishText  || null,
+    smartTitle:   smartTitle  || null,
+    englishText:  englishText || null,
     utterances:   englishUtterances || utterances,
     words:        transcript.words  || [],
     duration:     transcript.audio_duration || null,
@@ -302,8 +334,6 @@ const processTranscript = async (transcript) => {
 };
 
 // ─── ROUTE 1: Start transcription job (returns immediately) ───
-// ✅ This fixes timeout for long recordings (10 min, 1 hour, etc.)
-// Returns a jobId immediately — no waiting for transcription to complete
 app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
@@ -313,15 +343,12 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
 
     console.log('Starting async transcription...');
     console.log('File size:', req.file.size, 'bytes');
-    console.log('Duration estimate:', Math.round(req.file.size / 16000), 'seconds');
 
-    // Upload to AssemblyAI
     console.log('Uploading to AssemblyAI...');
     const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
     fs.unlinkSync(tempPath);
     console.log('Uploaded:', uploadUrl);
 
-    // Submit job — returns immediately without waiting
     const job = await aai.transcripts.submit({
       audio:              uploadUrl,
       speaker_labels:     true,
@@ -333,8 +360,6 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
     });
 
     console.log('Job submitted! ID:', job.id);
-
-    // Return job ID to client — client will poll for status
     res.json({ success: true, jobId: job.id });
 
   } catch (err) {
@@ -345,7 +370,6 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
 });
 
 // ─── ROUTE 2: Poll job status ───
-// Client calls this every 5 seconds to check if transcription is done
 app.get('/transcribe-status/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
@@ -359,12 +383,10 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
     }
 
     if (transcript.status === 'queued' || transcript.status === 'processing') {
-      // Still working — tell client to keep polling
       return res.json({ success: true, status: transcript.status });
     }
 
     if (transcript.status === 'completed') {
-      // Process and return full result
       console.log('Transcription completed! Processing...');
       const result = await processTranscript(transcript);
       return res.json(result);
