@@ -142,6 +142,7 @@ export const pollTranscription = async (jobId, onProgress = null) => {
         return {
           success:      true,
           text:         data.text,
+          smartTitle:   data.smartTitle   || null,   // ✅ ADD THIS
           englishText:  data.englishText  || null,
           utterances:   data.utterances   || [],
           words:        data.words        || [],
