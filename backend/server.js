@@ -14,7 +14,6 @@ const PORT   = process.env.PORT || 3000;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
 
-// ─── Supabase client (service role for server-side access) ───
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
@@ -59,13 +58,9 @@ app.post('/api/register', (req, res) => {
 // ─── Real-time streaming token ───
 app.get('/realtime-token', async (req, res) => {
   try {
-    console.log('Generating real-time token...');
     const response = await fetch(
       `https://streaming.assemblyai.com/v3/token?expires_in_seconds=480`,
-      {
-        method:  'GET',
-        headers: { 'Authorization': process.env.ASSEMBLYAI_KEY },
-      }
+      { method: 'GET', headers: { 'Authorization': process.env.ASSEMBLYAI_KEY } }
     );
     const responseText = await response.text();
     if (!response.ok) throw new Error(`Token error: ${response.status} ${responseText}`);
@@ -154,22 +149,15 @@ Rules:
 app.post('/share/generate', async (req, res) => {
   const { transcriptId } = req.body;
   if (!transcriptId) return res.status(400).json({ success: false, error: 'No transcriptId provided' });
-
   try {
-    // Generate a unique token
     const token = crypto.randomBytes(20).toString('hex');
-
     const { error } = await supabase
       .from('transcripts')
       .update({ share_token: token })
       .eq('id', transcriptId);
-
     if (error) throw error;
-
     const shareUrl = `${process.env.RENDER_URL || 'https://transcript-app-lbpe.onrender.com'}/share/${token}`;
-    console.log('Share link generated:', shareUrl);
     res.json({ success: true, shareUrl, token });
-
   } catch (err) {
     console.error('/share/generate error:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -180,13 +168,11 @@ app.post('/share/generate', async (req, res) => {
 app.post('/share/revoke', async (req, res) => {
   const { transcriptId } = req.body;
   if (!transcriptId) return res.status(400).json({ success: false, error: 'No transcriptId provided' });
-
   try {
     const { error } = await supabase
       .from('transcripts')
       .update({ share_token: null })
       .eq('id', transcriptId);
-
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -199,7 +185,6 @@ app.post('/share/revoke', async (req, res) => {
 app.get('/share/:token', async (req, res) => {
   try {
     const { token } = req.params;
-
     const { data, error } = await supabase
       .from('transcripts')
       .select('*')
@@ -215,27 +200,19 @@ app.get('/share/:token', async (req, res) => {
       `);
     }
 
-    const date     = new Date(data.created_at).toLocaleDateString('en-IN', {
-      day: 'numeric', month: 'short', year: 'numeric'
-    });
+    const date     = new Date(data.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     const duration = data.duration ? Math.round(data.duration / 60) + ' min' : 'N/A';
     const words    = data.word_count || 0;
 
-    // ─── Build summary HTML ───
     let summaryHTML = '';
     if (data.auto_summary) {
       summaryHTML = `
         <div class="section">
           <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
-          <div style="background:#F0FAF4;padding:16px;border-radius:8px;
-                      font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">
-            ${data.auto_summary}
-          </div>
-        </div>
-      `;
+          <div style="background:#F0FAF4;padding:16px;border-radius:8px;font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">${data.auto_summary}</div>
+        </div>`;
     }
 
-    // ─── Build action items HTML ───
     let actionHTML = '';
     if (data.action_items?.length > 0) {
       const rows = data.action_items.map((item, i) => `
@@ -244,35 +221,24 @@ app.get('/share/:token', async (req, res) => {
           <td style="padding:10px;border-bottom:1px solid #FFE0B2;">${item.task}</td>
           <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
           <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
-        </tr>
-      `).join('');
+        </tr>`).join('');
       actionHTML = `
         <div class="section">
           <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">✅ Action Items</div>
           <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;">
-            <thead>
-              <tr style="background:#FF9800;">
-                <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
-                <th style="padding:10px;color:#fff;text-align:left;">Task</th>
-                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
-                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
-              </tr>
-            </thead>
+            <thead><tr style="background:#FF9800;">
+              <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
+              <th style="padding:10px;color:#fff;text-align:left;">Task</th>
+              <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
+              <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
+            </tr></thead>
             <tbody>${rows}</tbody>
           </table>
-        </div>
-      `;
+        </div>`;
     }
 
-    // ─── Build transcript HTML ───
-    const speakerColors = [
-      '#1A56A0','#1A7A4A','#C85A00','#8B1AAF',
-      '#C0392B','#0097A7','#795548','#E91E63'
-    ];
-    const speakerBG = [
-      '#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE',
-      '#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'
-    ];
+    const speakerColors = ['#1A56A0','#1A7A4A','#C85A00','#8B1AAF','#C0392B','#0097A7','#795548','#E91E63'];
+    const speakerBG     = ['#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE','#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'];
 
     let transcriptHTML = '';
     if (data.utterances?.length > 0) {
@@ -287,68 +253,46 @@ app.get('/share/:token', async (req, res) => {
         return `
           <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-              <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;
-                           border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
+              <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
               <span style="font-size:11px;color:#888;">${start} — ${end}</span>
             </div>
             <div style="font-size:14px;color:#333;line-height:1.7;">${u.englishText || u.text}</div>
-            ${u.englishText && u.englishText !== u.text
-              ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>`
-              : ''}
-          </div>
-        `;
+            ${u.englishText && u.englishText !== u.text ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>` : ''}
+          </div>`;
       }).join('');
       transcriptHTML = `
         <div class="section">
           <div class="section-title">🎙 Speaker Transcript</div>
           ${utterancesHTML}
-        </div>
-      `;
+        </div>`;
     } else {
       transcriptHTML = `
         <div class="section">
           <div class="section-title">📝 Full Transcript</div>
-          <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">
-            ${data.english_text || data.text}
-          </div>
-        </div>
-      `;
+          <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">${data.english_text || data.text}</div>
+        </div>`;
     }
 
-    // ─── Full page HTML ───
-    const html = `
-      <!DOCTYPE html>
-      <html>
+    const html = `<!DOCTYPE html><html>
       <head>
         <meta charset="utf-8"/>
         <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
         <title>${data.title} — VoxNote</title>
         <style>
           * { margin:0; padding:0; box-sizing:border-box; }
-          body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                 background:#F5F7FA; color:#333; }
-          .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0);
-                    color:white; padding:32px 24px; }
-          .logo { font-size:12px; font-weight:700; letter-spacing:2px;
-                  color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
+          body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#F5F7FA; color:#333; }
+          .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0); color:white; padding:32px 24px; }
+          .logo { font-size:12px; font-weight:700; letter-spacing:2px; color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
           .title { font-size:22px; font-weight:800; margin-bottom:16px; line-height:1.3; }
           .meta-grid { display:flex; gap:12px; flex-wrap:wrap; }
-          .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px;
-                       border-radius:8px; font-size:12px; }
-          .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase;
-                        letter-spacing:1px; margin-bottom:2px; }
+          .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px; border-radius:8px; font-size:12px; }
+          .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px; }
           .meta-value { color:#fff; font-weight:600; }
-          .read-only-badge { display:inline-block; background:rgba(255,255,255,0.2);
-                             border:1px solid rgba(255,255,255,0.4); border-radius:20px;
-                             padding:6px 14px; font-size:11px; color:#fff;
-                             margin-top:16px; }
+          .read-only-badge { display:inline-block; background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.4); border-radius:20px; padding:6px 14px; font-size:11px; color:#fff; margin-top:16px; }
           .body { padding:24px; max-width:800px; margin:0 auto; }
           .section { margin-bottom:28px; }
-          .section-title { font-size:15px; font-weight:700; color:#0D3B7A;
-                           margin-bottom:14px; padding-left:12px;
-                           border-left:4px solid #1A56A0; }
-          .footer { text-align:center; padding:24px; font-size:11px; color:#AAA;
-                    border-top:1px solid #EEE; margin-top:20px; }
+          .section-title { font-size:15px; font-weight:700; color:#0D3B7A; margin-bottom:14px; padding-left:12px; border-left:4px solid #1A56A0; }
+          .footer { text-align:center; padding:24px; font-size:11px; color:#AAA; border-top:1px solid #EEE; margin-top:20px; }
           .footer a { color:#1A56A0; text-decoration:none; font-weight:600; }
         </style>
       </head>
@@ -357,38 +301,17 @@ app.get('/share/:token', async (req, res) => {
           <div class="logo">VoxNote — AI Transcription</div>
           <div class="title">${data.title}</div>
           <div class="meta-grid">
-            <div class="meta-item">
-              <div class="meta-label">Date</div>
-              <div class="meta-value">${date}</div>
-            </div>
-            <div class="meta-item">
-              <div class="meta-label">Duration</div>
-              <div class="meta-value">${duration}</div>
-            </div>
-            <div class="meta-item">
-              <div class="meta-label">Words</div>
-              <div class="meta-value">${words}</div>
-            </div>
+            <div class="meta-item"><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
+            <div class="meta-item"><div class="meta-label">Duration</div><div class="meta-value">${duration}</div></div>
+            <div class="meta-item"><div class="meta-label">Words</div><div class="meta-value">${words}</div></div>
           </div>
           <div class="read-only-badge">🔗 Shared read-only view</div>
         </div>
-
-        <div class="body">
-          ${summaryHTML}
-          ${actionHTML}
-          ${transcriptHTML}
-        </div>
-
-        <div class="footer">
-          Shared via <a href="https://play.google.com/store/apps/details?id=com.voxnote.app">VoxNote AI Transcription</a>
-          — Available on Google Play
-        </div>
-      </body>
-      </html>
-    `;
+        <div class="body">${summaryHTML}${actionHTML}${transcriptHTML}</div>
+        <div class="footer">Shared via <a href="https://play.google.com/store/apps/details?id=com.voxnote.app">VoxNote AI Transcription</a> — Available on Google Play</div>
+      </body></html>`;
 
     res.send(html);
-
   } catch (err) {
     console.error('/share/:token error:', err.message);
     res.status(500).send('<h2>Something went wrong</h2>');
@@ -483,7 +406,6 @@ Rules:
   }
 };
 
-// ─── Helper: Generate smart title ───
 const generateTitle = async (text, detectedLang) => {
   try {
     const truncated = text.length > 3000 ? text.substring(0, 3000) + '...' : text;
@@ -578,6 +500,7 @@ const processTranscript = async (transcript) => {
 };
 
 // ─── ROUTE 1: Start transcription job ───
+// ✅ Now submits with webhook URL so AssemblyAI calls us when done
 app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
@@ -591,6 +514,8 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
     fs.unlinkSync(tempPath);
     console.log('Uploaded:', uploadUrl);
 
+    const webhookUrl = `${process.env.RENDER_URL}/webhook/assemblyai`;
+
     const job = await aai.transcripts.submit({
       audio:              uploadUrl,
       speaker_labels:     true,
@@ -598,10 +523,18 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models: ['universal-3-pro', 'universal-2'],
+      speech_models:      ['universal-3-pro', 'universal-2'],
+      webhook_url:        webhookUrl, // ✅ AssemblyAI will call this when done
     });
 
-    console.log('Job submitted! ID:', job.id);
+    console.log('Job submitted with webhook! ID:', job.id);
+
+    // ✅ Save job as processing in Supabase immediately
+    await supabase.from('transcription_jobs').insert({
+      id:     job.id,
+      status: 'processing',
+    });
+
     res.json({ success: true, jobId: job.id });
 
   } catch (err) {
@@ -611,24 +544,126 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   }
 });
 
+// ─── WEBHOOK: AssemblyAI calls this when transcription is done ───
+// ✅ This is the key fix — no more duplicate processing!
+// AssemblyAI calls this once → we process once → store result in Supabase
+app.post('/webhook/assemblyai', async (req, res) => {
+  try {
+    const { transcript_id, status } = req.body;
+    console.log('Webhook received! Job:', transcript_id, 'Status:', status);
+
+    // Respond immediately so AssemblyAI doesn't retry
+    res.json({ success: true });
+
+    if (status !== 'completed') {
+      console.log('Webhook status not completed:', status);
+      await supabase.from('transcription_jobs')
+        .update({ status })
+        .eq('id', transcript_id);
+      return;
+    }
+
+    // ✅ Check if already processed — prevents duplicate processing
+    const { data: existingJob } = await supabase
+      .from('transcription_jobs')
+      .select('status, result')
+      .eq('id', transcript_id)
+      .single();
+
+    if (existingJob?.status === 'done') {
+      console.log('Job already processed, skipping:', transcript_id);
+      return;
+    }
+
+    // ✅ Fetch full transcript from AssemblyAI
+    console.log('Fetching transcript from AssemblyAI...');
+    const transcript = await aai.transcripts.get(transcript_id);
+
+    if (transcript.status !== 'completed') {
+      console.log('Transcript not ready yet:', transcript.status);
+      return;
+    }
+
+    // ✅ Process ONCE — translate, summarize, title
+    console.log('Processing transcript (webhook)...');
+    const result = await processTranscript(transcript);
+
+    // ✅ Store result in Supabase — phone fetches this instead of reprocessing
+    await supabase.from('transcription_jobs')
+      .update({
+        status:       'done',
+        result:       result,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', transcript_id);
+
+    console.log('Webhook processing complete! Job:', transcript_id);
+
+  } catch (err) {
+    console.error('Webhook error:', err.message);
+  }
+});
+
 // ─── ROUTE 2: Poll job status ───
+// ✅ Now checks Supabase cache first — no more reprocessing!
 app.get('/transcribe-status/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
     console.log('Checking status for job:', jobId);
 
+    // ✅ Check Supabase cache first
+    const { data: cachedJob } = await supabase
+      .from('transcription_jobs')
+      .select('status, result')
+      .eq('id', jobId)
+      .single();
+
+    if (cachedJob?.status === 'done' && cachedJob?.result) {
+      console.log('Returning cached result for job:', jobId);
+      return res.json(cachedJob.result);
+    }
+
+    // ✅ Not done yet — check AssemblyAI for current status
     const transcript = await aai.transcripts.get(jobId);
-    console.log('Job status:', transcript.status);
+    console.log('AssemblyAI job status:', transcript.status);
 
     if (transcript.status === 'error') {
+      await supabase.from('transcription_jobs')
+        .update({ status: 'error' })
+        .eq('id', jobId);
       return res.json({ success: false, status: 'error', error: transcript.error });
     }
+
     if (transcript.status === 'queued' || transcript.status === 'processing') {
       return res.json({ success: true, status: transcript.status });
     }
+
+    // ✅ Completed but webhook hasn't fired yet — process now and cache
     if (transcript.status === 'completed') {
-      console.log('Transcription completed! Processing...');
+      // Check again if another request already processed it
+      const { data: recheckJob } = await supabase
+        .from('transcription_jobs')
+        .select('status, result')
+        .eq('id', jobId)
+        .single();
+
+      if (recheckJob?.status === 'done' && recheckJob?.result) {
+        console.log('Returning cached result (recheck) for job:', jobId);
+        return res.json(recheckJob.result);
+      }
+
+      console.log('Processing completed transcript (fallback)...');
       const result = await processTranscript(transcript);
+
+      // ✅ Cache it so this never runs again for this job
+      await supabase.from('transcription_jobs')
+        .update({
+          status:       'done',
+          result:       result,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', jobId);
+
       return res.json(result);
     }
 
@@ -662,7 +697,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models: ['universal-3-pro', 'universal-2'],
+      speech_models:      ['universal-3-pro', 'universal-2'],
     });
 
     if (transcript.status === 'error') throw new Error('AssemblyAI error: ' + transcript.error);
