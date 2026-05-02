@@ -3,14 +3,22 @@ const multer     = require('multer');
 const cors       = require('cors');
 const path       = require('path');
 const fs         = require('fs');
+const crypto     = require('crypto');
 const OpenAI     = require('openai');
 const { AssemblyAI } = require('assemblyai');
+const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app    = express();
 const PORT   = process.env.PORT || 3000;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
+
+// ─── Supabase client (service role for server-side access) ───
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '10mb' }));
@@ -52,7 +60,6 @@ app.post('/api/register', (req, res) => {
 app.get('/realtime-token', async (req, res) => {
   try {
     console.log('Generating real-time token...');
-
     const response = await fetch(
       `https://streaming.assemblyai.com/v3/token?expires_in_seconds=480`,
       {
@@ -60,18 +67,10 @@ app.get('/realtime-token', async (req, res) => {
         headers: { 'Authorization': process.env.ASSEMBLYAI_KEY },
       }
     );
-
     const responseText = await response.text();
-    console.log('Token API response:', response.status, responseText);
-
-    if (!response.ok) {
-      throw new Error(`Token error: ${response.status} ${responseText}`);
-    }
-
+    if (!response.ok) throw new Error(`Token error: ${response.status} ${responseText}`);
     const data = JSON.parse(responseText);
-    console.log('Token generated successfully');
     res.json({ success: true, token: data.token });
-
   } catch (err) {
     console.error('Real-time token error:', err.message);
     res.status(500).json({ success: false, error: err.message });
@@ -144,11 +143,255 @@ Rules:
       ],
       max_tokens: 800,
     });
-
     res.json({ success: true, answer: completion.choices[0].message.content, question });
   } catch (err) {
     console.error('/chat error:', err.message);
     res.status(500).json({ success: false, error: 'Chat failed: ' + err.message });
+  }
+});
+
+// ─── SHARE: Generate share link ───
+app.post('/share/generate', async (req, res) => {
+  const { transcriptId } = req.body;
+  if (!transcriptId) return res.status(400).json({ success: false, error: 'No transcriptId provided' });
+
+  try {
+    // Generate a unique token
+    const token = crypto.randomBytes(20).toString('hex');
+
+    const { error } = await supabase
+      .from('transcripts')
+      .update({ share_token: token })
+      .eq('id', transcriptId);
+
+    if (error) throw error;
+
+    const shareUrl = `${process.env.RENDER_URL || 'https://transcript-app-lbpe.onrender.com'}/share/${token}`;
+    console.log('Share link generated:', shareUrl);
+    res.json({ success: true, shareUrl, token });
+
+  } catch (err) {
+    console.error('/share/generate error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── SHARE: Revoke share link ───
+app.post('/share/revoke', async (req, res) => {
+  const { transcriptId } = req.body;
+  if (!transcriptId) return res.status(400).json({ success: false, error: 'No transcriptId provided' });
+
+  try {
+    const { error } = await supabase
+      .from('transcripts')
+      .update({ share_token: null })
+      .eq('id', transcriptId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error('/share/revoke error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── SHARE: Public read-only page ───
+app.get('/share/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const { data, error } = await supabase
+      .from('transcripts')
+      .select('*')
+      .eq('share_token', token)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).send(`
+        <html><body style="font-family:sans-serif;text-align:center;padding:60px;background:#F5F7FA;">
+          <h2>🔗 Link not found</h2>
+          <p style="color:#888;">This link may have expired or been revoked.</p>
+        </body></html>
+      `);
+    }
+
+    const date     = new Date(data.created_at).toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', year: 'numeric'
+    });
+    const duration = data.duration ? Math.round(data.duration / 60) + ' min' : 'N/A';
+    const words    = data.word_count || 0;
+
+    // ─── Build summary HTML ───
+    let summaryHTML = '';
+    if (data.auto_summary) {
+      summaryHTML = `
+        <div class="section">
+          <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
+          <div style="background:#F0FAF4;padding:16px;border-radius:8px;
+                      font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">
+            ${data.auto_summary}
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── Build action items HTML ───
+    let actionHTML = '';
+    if (data.action_items?.length > 0) {
+      const rows = data.action_items.map((item, i) => `
+        <tr>
+          <td style="padding:10px;border-bottom:1px solid #FFE0B2;font-weight:600;color:#E65100;">${i + 1}</td>
+          <td style="padding:10px;border-bottom:1px solid #FFE0B2;">${item.task}</td>
+          <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
+          <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
+        </tr>
+      `).join('');
+      actionHTML = `
+        <div class="section">
+          <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">✅ Action Items</div>
+          <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;">
+            <thead>
+              <tr style="background:#FF9800;">
+                <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
+                <th style="padding:10px;color:#fff;text-align:left;">Task</th>
+                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
+                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    // ─── Build transcript HTML ───
+    const speakerColors = [
+      '#1A56A0','#1A7A4A','#C85A00','#8B1AAF',
+      '#C0392B','#0097A7','#795548','#E91E63'
+    ];
+    const speakerBG = [
+      '#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE',
+      '#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'
+    ];
+
+    let transcriptHTML = '';
+    if (data.utterances?.length > 0) {
+      const getSpeakerIdx = (speaker) => {
+        const code = speaker?.slice(-1)?.toUpperCase().charCodeAt(0) || 65;
+        return (code >= 65 && code <= 72) ? code - 65 : Math.abs(code - 65) % 8;
+      };
+      const utterancesHTML = data.utterances.map(u => {
+        const idx   = getSpeakerIdx(u.speaker);
+        const start = u.start ? `${Math.floor(u.start/60000).toString().padStart(2,'0')}:${Math.floor((u.start%60000)/1000).toString().padStart(2,'0')}` : '';
+        const end   = u.end   ? `${Math.floor(u.end/60000).toString().padStart(2,'0')}:${Math.floor((u.end%60000)/1000).toString().padStart(2,'0')}` : '';
+        return `
+          <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+              <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;
+                           border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
+              <span style="font-size:11px;color:#888;">${start} — ${end}</span>
+            </div>
+            <div style="font-size:14px;color:#333;line-height:1.7;">${u.englishText || u.text}</div>
+            ${u.englishText && u.englishText !== u.text
+              ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>`
+              : ''}
+          </div>
+        `;
+      }).join('');
+      transcriptHTML = `
+        <div class="section">
+          <div class="section-title">🎙 Speaker Transcript</div>
+          ${utterancesHTML}
+        </div>
+      `;
+    } else {
+      transcriptHTML = `
+        <div class="section">
+          <div class="section-title">📝 Full Transcript</div>
+          <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">
+            ${data.english_text || data.text}
+          </div>
+        </div>
+      `;
+    }
+
+    // ─── Full page HTML ───
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <title>${data.title} — VoxNote</title>
+        <style>
+          * { margin:0; padding:0; box-sizing:border-box; }
+          body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                 background:#F5F7FA; color:#333; }
+          .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0);
+                    color:white; padding:32px 24px; }
+          .logo { font-size:12px; font-weight:700; letter-spacing:2px;
+                  color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
+          .title { font-size:22px; font-weight:800; margin-bottom:16px; line-height:1.3; }
+          .meta-grid { display:flex; gap:12px; flex-wrap:wrap; }
+          .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px;
+                       border-radius:8px; font-size:12px; }
+          .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase;
+                        letter-spacing:1px; margin-bottom:2px; }
+          .meta-value { color:#fff; font-weight:600; }
+          .read-only-badge { display:inline-block; background:rgba(255,255,255,0.2);
+                             border:1px solid rgba(255,255,255,0.4); border-radius:20px;
+                             padding:6px 14px; font-size:11px; color:#fff;
+                             margin-top:16px; }
+          .body { padding:24px; max-width:800px; margin:0 auto; }
+          .section { margin-bottom:28px; }
+          .section-title { font-size:15px; font-weight:700; color:#0D3B7A;
+                           margin-bottom:14px; padding-left:12px;
+                           border-left:4px solid #1A56A0; }
+          .footer { text-align:center; padding:24px; font-size:11px; color:#AAA;
+                    border-top:1px solid #EEE; margin-top:20px; }
+          .footer a { color:#1A56A0; text-decoration:none; font-weight:600; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="logo">VoxNote — AI Transcription</div>
+          <div class="title">${data.title}</div>
+          <div class="meta-grid">
+            <div class="meta-item">
+              <div class="meta-label">Date</div>
+              <div class="meta-value">${date}</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Duration</div>
+              <div class="meta-value">${duration}</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-label">Words</div>
+              <div class="meta-value">${words}</div>
+            </div>
+          </div>
+          <div class="read-only-badge">🔗 Shared read-only view</div>
+        </div>
+
+        <div class="body">
+          ${summaryHTML}
+          ${actionHTML}
+          ${transcriptHTML}
+        </div>
+
+        <div class="footer">
+          Shared via <a href="https://play.google.com/store/apps/details?id=com.voxnote.app">VoxNote AI Transcription</a>
+          — Available on Google Play
+        </div>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+
+  } catch (err) {
+    console.error('/share/:token error:', err.message);
+    res.status(500).send('<h2>Something went wrong</h2>');
   }
 });
 
@@ -315,8 +558,8 @@ const processTranscript = async (transcript) => {
   const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
 
   console.log('Generating smart title...');
-const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
-console.log('Smart title result:', smartTitle);
+  const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
+  console.log('Smart title result:', smartTitle);
 
   return {
     success:      true,
@@ -334,13 +577,11 @@ console.log('Smart title result:', smartTitle);
   };
 };
 
-// ─── ROUTE 1: Start transcription job (returns immediately) ───
+// ─── ROUTE 1: Start transcription job ───
 app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No audio file received' });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
 
     console.log('Starting async transcription...');
     console.log('File size:', req.file.size, 'bytes');
@@ -382,11 +623,9 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
     if (transcript.status === 'error') {
       return res.json({ success: false, status: 'error', error: transcript.error });
     }
-
     if (transcript.status === 'queued' || transcript.status === 'processing') {
       return res.json({ success: true, status: transcript.status });
     }
-
     if (transcript.status === 'completed') {
       console.log('Transcription completed! Processing...');
       const result = await processTranscript(transcript);
@@ -401,13 +640,11 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
   }
 });
 
-// ─── ROUTE 3: Old sync route (kept for short recordings < 2 min) ───
+// ─── ROUTE 3: Old sync route (kept for short recordings) ───
 app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No audio file received' });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
 
     console.log('Audio file received:', req.file.originalname);
     console.log('File size:', req.file.size, 'bytes');
@@ -428,11 +665,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       speech_models: ['universal-3-pro', 'universal-2'],
     });
 
-    console.log('Transcript status:', transcript.status);
-
-    if (transcript.status === 'error') {
-      throw new Error('AssemblyAI error: ' + transcript.error);
-    }
+    if (transcript.status === 'error') throw new Error('AssemblyAI error: ' + transcript.error);
 
     const result = await processTranscript(transcript);
     console.log('Processing complete!');

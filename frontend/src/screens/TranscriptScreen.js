@@ -7,6 +7,8 @@ import {
   StatusBar, Modal, Keyboard
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { summarizeTranscript, chatWithTranscripts } from '../services/api';
 import { updateSpeakerNames, updateTranscriptFolder } from '../utils/storage';
 
@@ -47,6 +49,7 @@ export default function TranscriptScreen({ route }) {
   const [chatMessages,   setChatMessages]   = useState([]);
   const [chatInput,      setChatInput]      = useState('');
   const [chatLoading,    setChatLoading]    = useState(false);
+  const [exportingPDF,   setExportingPDF]   = useState(false);
 
   // Speaker naming
   const [utterances,      setUtterances]      = useState(transcript.utterances || []);
@@ -60,8 +63,8 @@ export default function TranscriptScreen({ route }) {
   const [folderModal,   setFolderModal]   = useState(false);
   const [savingFolder,  setSavingFolder]  = useState(false);
 
-  const flatListRef  = useRef(null);
-  const inputRef     = useRef(null);
+  const flatListRef = useRef(null);
+  const inputRef    = useRef(null);
 
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
@@ -152,6 +155,259 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
+  // ─── PDF Export ───
+  const exportAsPDF = async () => {
+    try {
+      setExportingPDF(true);
+
+      const date     = formatDate(transcript.createdAt);
+      const duration = transcript.duration
+        ? Math.round(transcript.duration / 60) + ' min'
+        : 'N/A';
+      const words    = transcript.wordCount || 0;
+      const lang     = getLangBadge();
+
+      // ─── Build action items HTML ───
+      let actionItemsHTML = '';
+      if (transcript.actionItems?.length > 0) {
+        const rows = transcript.actionItems.map((item, i) => `
+          <tr>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;font-weight:600;color:#E65100;">${i + 1}</td>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#333;">${item.task}</td>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
+          </tr>
+        `).join('');
+
+        actionItemsHTML = `
+          <div class="section">
+            <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">
+              ✅ Action Items
+            </div>
+            <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;overflow:hidden;">
+              <thead>
+                <tr style="background:#FF9800;">
+                  <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
+                  <th style="padding:10px;color:#fff;text-align:left;">Task</th>
+                  <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
+                  <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      // ─── Build summary HTML ───
+      const summaryContent = summary || transcript.autoSummary;
+      let summaryHTML = '';
+      if (summaryContent) {
+        summaryHTML = `
+          <div class="section">
+            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">
+              🤖 AI Summary
+            </div>
+            <div style="background:#F0FAF4;padding:16px;border-radius:8px;
+                        font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">
+              ${summaryContent}
+            </div>
+          </div>
+        `;
+      }
+
+      // ─── Build transcript HTML ───
+      let transcriptHTML = '';
+      if (utterances.length > 0) {
+        const speakerColors = [
+          '#1A56A0','#1A7A4A','#C85A00','#8B1AAF',
+          '#C0392B','#0097A7','#795548','#E91E63'
+        ];
+        const speakerBG = [
+          '#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE',
+          '#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'
+        ];
+        const utterancesHTML = utterances.map((u) => {
+          const idx   = getSpeakerIndex(u.speaker);
+          const color = speakerColors[idx];
+          const bg    = speakerBG[idx];
+          const start = formatTime(u.start);
+          const end   = formatTime(u.end);
+          return `
+            <div style="background:${bg};border-radius:10px;padding:14px;margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <span style="background:${color};color:#fff;padding:4px 12px;
+                             border-radius:12px;font-size:12px;font-weight:700;">
+                  ${u.speaker}
+                </span>
+                <span style="font-size:11px;color:#888;">${start} — ${end}</span>
+              </div>
+              <div style="font-size:14px;color:#333;line-height:1.7;">
+                ${u.englishText || u.text}
+              </div>
+              ${u.englishText && u.englishText !== u.text
+                ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>`
+                : ''}
+            </div>
+          `;
+        }).join('');
+
+        transcriptHTML = `
+          <div class="section">
+            <div class="section-title">🎙 Speaker Transcript</div>
+            ${utterancesHTML}
+          </div>
+        `;
+      } else {
+        transcriptHTML = `
+          <div class="section">
+            <div class="section-title">📝 Full Transcript</div>
+            <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">
+              ${transcript.englishText || transcript.text}
+            </div>
+          </div>
+        `;
+      }
+
+      // ─── Full HTML ───
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8"/>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+              background: #fff;
+              color: #333;
+            }
+            .header {
+              background: linear-gradient(135deg, #0D3B7A, #1A56A0);
+              color: white;
+              padding: 32px 40px;
+            }
+            .logo {
+              font-size: 13px;
+              font-weight: 700;
+              letter-spacing: 2px;
+              color: #AACFEE;
+              margin-bottom: 12px;
+              text-transform: uppercase;
+            }
+            .title {
+              font-size: 24px;
+              font-weight: 800;
+              margin-bottom: 16px;
+              line-height: 1.3;
+            }
+            .meta-grid {
+              display: flex;
+              gap: 24px;
+              flex-wrap: wrap;
+            }
+            .meta-item {
+              background: rgba(255,255,255,0.15);
+              padding: 8px 14px;
+              border-radius: 8px;
+              font-size: 12px;
+            }
+            .meta-label {
+              color: #AACFEE;
+              font-size: 10px;
+              text-transform: uppercase;
+              letter-spacing: 1px;
+              margin-bottom: 2px;
+            }
+            .meta-value {
+              color: #fff;
+              font-weight: 600;
+            }
+            .body { padding: 32px 40px; }
+            .section {
+              margin-bottom: 32px;
+            }
+            .section-title {
+              font-size: 16px;
+              font-weight: 700;
+              color: #0D3B7A;
+              margin-bottom: 16px;
+              padding-left: 12px;
+              border-left: 4px solid #1A56A0;
+            }
+            .footer {
+              margin-top: 40px;
+              padding: 20px 40px;
+              border-top: 1px solid #EEE;
+              text-align: center;
+              font-size: 11px;
+              color: #AAA;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">VoxNote — AI Transcription</div>
+            <div class="title">${transcript.title}</div>
+            <div class="meta-grid">
+              <div class="meta-item">
+                <div class="meta-label">Date</div>
+                <div class="meta-value">${date}</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-label">Duration</div>
+                <div class="meta-value">${duration}</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-label">Words</div>
+                <div class="meta-value">${words}</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-label">Language</div>
+                <div class="meta-value">${lang}</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-label">Folder</div>
+                <div class="meta-value">${currentFolder}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="body">
+            ${summaryHTML}
+            ${actionItemsHTML}
+            ${transcriptHTML}
+          </div>
+
+          <div class="footer">
+            Generated by VoxNote AI Transcription App • ${new Date().toLocaleDateString('en-IN')}
+          </div>
+        </body>
+        </html>
+      `;
+
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Share or Save PDF',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        Alert.alert('PDF Created', 'Saved to: ' + uri);
+      }
+
+    } catch (err) {
+      console.error('PDF export error:', err);
+      Alert.alert('Error', 'Could not generate PDF: ' + err.message);
+    } finally {
+      setExportingPDF(false);
+    }
+  };
+
   const getSummary = async () => {
     setLoadingSummary(true);
     setSummary(null);
@@ -201,10 +457,10 @@ export default function TranscriptScreen({ route }) {
 
   const getLangBadge = () => {
     const lang = transcript.detectedLang || 'en';
-    if (lang === 'en') return '🇬🇧 English';
-    if (lang === 'hi') return '🇮🇳 Hindi';
-    if (lang === 'mr') return '🏙️ Marathi';
-    return '🌐 Auto';
+    if (lang === 'en') return 'English';
+    if (lang === 'hi') return 'Hindi';
+    if (lang === 'mr') return 'Marathi';
+    return 'Auto';
   };
 
   // ─── Folder Modal ───
@@ -294,16 +550,14 @@ export default function TranscriptScreen({ route }) {
   );
 
   // ─── Chat Panel ───
-  // ✅ FIX: Wrap entire chat panel in KeyboardAvoidingView for Samsung
   const renderChatPanel = () => (
     <KeyboardAvoidingView
       style={styles.chatOverlay}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'android' ? 0 : 0}>
+      keyboardVerticalOffset={0}>
 
       <StatusBar barStyle="light-content" backgroundColor="#6C3FA0" />
 
-      {/* Header */}
       <View style={styles.chatHeader}>
         <TouchableOpacity onPress={() => {
           Keyboard.dismiss();
@@ -315,12 +569,10 @@ export default function TranscriptScreen({ route }) {
         <View style={{ width: 60 }} />
       </View>
 
-      {/* Context */}
       <View style={styles.chatContext}>
         <Text style={styles.chatContextText} numberOfLines={1}>📝 {transcript.title}</Text>
       </View>
 
-      {/* Suggestions */}
       {chatMessages.length === 0 && (
         <View style={styles.suggestionsContainer}>
           <Text style={styles.suggestionsTitle}>Try asking:</Text>
@@ -340,7 +592,6 @@ export default function TranscriptScreen({ route }) {
         </View>
       )}
 
-      {/* Messages */}
       <FlatList
         ref={flatListRef}
         data={chatMessages}
@@ -366,7 +617,6 @@ export default function TranscriptScreen({ route }) {
         ) : null}
       />
 
-      {/* ✅ FIX: Input row — no more nested KeyboardAvoidingView */}
       <View style={styles.chatInputWrapper}>
         <View style={styles.chatInputRow}>
           <TextInput
@@ -382,7 +632,6 @@ export default function TranscriptScreen({ route }) {
             blurOnSubmit={false}
             onSubmitEditing={sendChatMessage}
             onFocus={() => {
-              // Scroll to bottom when keyboard opens
               setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 300);
             }}
           />
@@ -393,7 +642,6 @@ export default function TranscriptScreen({ route }) {
             <Text style={styles.sendBtnText}>➤</Text>
           </TouchableOpacity>
         </View>
-        {/* ✅ Samsung nav bar spacer */}
         <View style={styles.navBarSpacer} />
       </View>
 
@@ -449,10 +697,25 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.chatBtnArrow}>›</Text>
         </TouchableOpacity>
 
-        {/* Export Button */}
+        {/* ✅ PDF Export Button */}
+        <TouchableOpacity
+          style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]}
+          onPress={exportAsPDF}
+          disabled={exportingPDF}>
+          {exportingPDF ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <Text style={styles.pdfBtnIcon}>📄</Text>
+          )}
+          <Text style={styles.pdfBtnText}>
+            {exportingPDF ? 'Generating PDF...' : 'Export as PDF'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Export as Text Button */}
         <TouchableOpacity style={styles.exportBtn} onPress={exportAsText}>
-          <Text style={styles.exportBtnIcon}>📄</Text>
-          <Text style={styles.exportBtnText}>Export Full Transcript</Text>
+          <Text style={styles.exportBtnIcon}>📋</Text>
+          <Text style={styles.exportBtnText}>Export Full Transcript (Text)</Text>
         </TouchableOpacity>
 
         {/* Summary */}
@@ -577,6 +840,7 @@ export default function TranscriptScreen({ route }) {
             )}
           </View>
         )}
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -613,6 +877,12 @@ const styles = StyleSheet.create({
   chatBtnTitle:      { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
   chatBtnSubtitle:   { color: '#DDD0FF', fontSize: 11, marginTop: 2 },
   chatBtnArrow:      { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
+
+  // ✅ PDF Button
+  pdfBtn:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#C0392B',
+                  padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  pdfBtnIcon:   { fontSize: 20 },
+  pdfBtnText:   { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
   exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A',
                   padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
@@ -703,7 +973,6 @@ const styles = StyleSheet.create({
   modalSaveText:    { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
 
   // ─── Chat ───
-  // ✅ FIX: chatOverlay is now the KeyboardAvoidingView itself
   chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                       backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
   chatHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -733,8 +1002,6 @@ const styles = StyleSheet.create({
   aiBubbleText:     { color: '#333333' },
   typingIndicator:  { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
   typingText:       { fontSize: 13, color: '#888', fontStyle: 'italic' },
-
-  // ✅ FIX: Input wrapper — clean, no nested KeyboardAvoidingView
   chatInputWrapper: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#EEE' },
   chatInputRow:     { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10,
                       paddingBottom: 8, gap: 8, alignItems: 'flex-end' },
@@ -745,6 +1012,5 @@ const styles = StyleSheet.create({
                       justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
   sendBtnDisabled:  { backgroundColor: '#CCC' },
   sendBtnText:      { color: '#FFFFFF', fontSize: 18 },
-  // ✅ Smaller spacer — keyboard handles the main offset now
   navBarSpacer:     { height: 20, backgroundColor: '#FFFFFF' },
 });
