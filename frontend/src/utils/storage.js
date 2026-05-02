@@ -21,7 +21,7 @@ export const saveTranscript = async (transcriptObj) => {
         auto_summary: transcriptObj.autoSummary  || null,
         action_items: transcriptObj.actionItems  || null,
         mode:         transcriptObj.mode         || 'en',
-        folder:       transcriptObj.folder       || 'General', // ✅ NEW
+        folder:       transcriptObj.folder       || 'General',
       })
       .select('id')
       .single();
@@ -59,7 +59,7 @@ export const getAllTranscripts = async () => {
       originalText: t.original_text|| null,
       autoSummary:  t.auto_summary || null,
       actionItems:  t.action_items || null,
-      folder:       t.folder       || 'General', // ✅ NEW
+      folder:       t.folder       || 'General',
       mode:         t.mode         || 'en',
       createdAt:    t.created_at,
     }));
@@ -114,7 +114,7 @@ export const updateSpeakerNames = async (transcriptId, utterances, speakerMap) =
   }
 };
 
-// ─── NEW: Update folder for a transcript ───
+// ─── Update folder ───
 export const updateTranscriptFolder = async (transcriptId, folder) => {
   try {
     console.log('Updating folder:', transcriptId, '→', folder);
@@ -132,6 +132,95 @@ export const updateTranscriptFolder = async (transcriptId, folder) => {
   }
 };
 
+// ─── NEW: Full-text search across all transcript fields ───
+export const searchTranscripts = (transcripts, query) => {
+  if (!query || !query.trim()) return transcripts.map(t => ({ ...t, matchContext: null }));
+
+  const q = query.toLowerCase().trim();
+
+  const results = [];
+
+  for (const t of transcripts) {
+    let matchContext = null;
+
+    // 1. Title match
+    if (t.title?.toLowerCase().includes(q)) {
+      matchContext = { field: 'title', snippet: null };
+    }
+
+    // 2. English text match
+    if (!matchContext && t.englishText?.toLowerCase().includes(q)) {
+      matchContext = {
+        field:   'transcript',
+        snippet: getSnippet(t.englishText, q),
+      };
+    }
+
+    // 3. Original text match (Hindi/Marathi)
+    if (!matchContext && t.text?.toLowerCase().includes(q)) {
+      matchContext = {
+        field:   'transcript',
+        snippet: getSnippet(t.text, q),
+      };
+    }
+
+    // 4. AI Summary match
+    if (!matchContext && t.autoSummary?.toLowerCase().includes(q)) {
+      matchContext = {
+        field:   'summary',
+        snippet: getSnippet(t.autoSummary, q),
+      };
+    }
+
+    // 5. Utterances match — find which speaker said it
+    if (!matchContext && t.utterances?.length > 0) {
+      for (const u of t.utterances) {
+        const uText = (u.englishText || u.text || '').toLowerCase();
+        if (uText.includes(q)) {
+          matchContext = {
+            field:   'speaker',
+            speaker: u.speaker,
+            snippet: getSnippet(u.englishText || u.text, q),
+          };
+          break;
+        }
+      }
+    }
+
+    // 6. Action items match
+    if (!matchContext && t.actionItems?.length > 0) {
+      for (const a of t.actionItems) {
+        const aText = (a.task || '').toLowerCase();
+        if (aText.includes(q)) {
+          matchContext = {
+            field:   'action',
+            snippet: a.task,
+          };
+          break;
+        }
+      }
+    }
+
+    if (matchContext) {
+      results.push({ ...t, matchContext });
+    }
+  }
+
+  return results;
+};
+
+// ─── Helper: extract snippet around matched word ───
+const getSnippet = (text, query) => {
+  if (!text) return null;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return null;
+  const start  = Math.max(0, idx - 40);
+  const end    = Math.min(text.length, idx + query.length + 60);
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < text.length ? '...' : '';
+  return prefix + text.substring(start, end) + suffix;
+};
+
 export const createTranscriptObj = (
   title,
   text,
@@ -144,7 +233,7 @@ export const createTranscriptObj = (
   autoSummary  = null,
   actionItems  = null,
   mode         = 'en',
-  folder       = 'General' // ✅ NEW
+  folder       = 'General'
 ) => ({
   id:           null,
   title:        title,
@@ -157,7 +246,7 @@ export const createTranscriptObj = (
   originalText: originalText,
   autoSummary:  autoSummary,
   actionItems:  actionItems,
-  folder:       folder,       // ✅ NEW
+  folder:       folder,
   mode:         mode,
   createdAt:    new Date().toISOString(),
   wordCount:    text ? text.split(' ').length : 0,

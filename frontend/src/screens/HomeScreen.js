@@ -5,7 +5,7 @@ import {
   ScrollView
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getAllTranscripts, deleteTranscript } from '../utils/storage';
+import { getAllTranscripts, deleteTranscript, searchTranscripts } from '../utils/storage';
 
 // ─── Folder tabs ───
 const FOLDERS = ['All', 'General', 'Work', 'Personal', 'Meetings', 'Lectures'];
@@ -63,11 +63,21 @@ const formatDuration = (seconds) => {
   return mins < 1 ? '< 1 min' : `${mins} min`;
 };
 
+// ─── Match context badge ───
+const MATCH_LABELS = {
+  title:      { icon: '📌', label: 'Title match' },
+  transcript: { icon: '📝', label: 'In transcript' },
+  summary:    { icon: '🤖', label: 'In summary' },
+  speaker:    { icon: '🗣️', label: 'Speaker said' },
+  action:     { icon: '✅', label: 'Action item' },
+};
+
 export default function HomeScreen({ navigation }) {
   const [transcripts,   setTranscripts]   = useState([]);
   const [searchQuery,   setSearchQuery]   = useState('');
   const [filtered,      setFiltered]      = useState([]);
   const [activeFolder,  setActiveFolder]  = useState('All');
+  const [isSearching,   setIsSearching]   = useState(false);
 
   useFocusEffect(useCallback(() => {
     const loadTranscripts = async () => {
@@ -86,13 +96,11 @@ export default function HomeScreen({ navigation }) {
       results = results.filter(t => (t.folder || 'General') === folder);
     }
 
-    // Filter by search
+    // Full-text search across all fields
     if (query.trim()) {
-      const q = query.toLowerCase();
-      results = results.filter(t =>
-        t.title?.toLowerCase().includes(q) ||
-        t.text?.toLowerCase().includes(q)
-      );
+      results = searchTranscripts(results, query);
+    } else {
+      results = results.map(t => ({ ...t, matchContext: null }));
     }
 
     setFiltered(results);
@@ -100,6 +108,7 @@ export default function HomeScreen({ navigation }) {
 
   const handleSearch = (text) => {
     setSearchQuery(text);
+    setIsSearching(text.trim().length > 0);
     applyFilters(transcripts, text, activeFolder);
   };
 
@@ -128,21 +137,43 @@ export default function HomeScreen({ navigation }) {
     return transcripts.filter(t => (t.folder || 'General') === folder).length;
   };
 
+  // ─── Render match context snippet ───
+  const renderMatchContext = (matchContext) => {
+    if (!matchContext) return null;
+    const meta = MATCH_LABELS[matchContext.field] || { icon: '🔍', label: 'Match' };
+    return (
+      <View style={styles.matchBox}>
+        <View style={styles.matchBadge}>
+          <Text style={styles.matchBadgeText}>
+            {meta.icon} {matchContext.speaker
+              ? `${matchContext.speaker} said`
+              : meta.label}
+          </Text>
+        </View>
+        {matchContext.snippet && (
+          <Text style={styles.matchSnippet} numberOfLines={2}>
+            {matchContext.snippet}
+          </Text>
+        )}
+      </View>
+    );
+  };
+
   // ─── Render card ───
   const renderCard = (item) => {
-    const bullets  = extractBullets(item.autoSummary);
-    const duration = formatDuration(item.duration);
-    const time     = new Date(item.createdAt).toLocaleTimeString('en-IN', {
+    const bullets     = item.matchContext ? [] : extractBullets(item.autoSummary);
+    const duration    = formatDuration(item.duration);
+    const time        = new Date(item.createdAt).toLocaleTimeString('en-IN', {
       hour: '2-digit', minute: '2-digit', hour12: true
     });
-    const langFlag = item.detectedLang === 'hi' ? '🇮🇳'
-                   : item.detectedLang === 'mr' ? '🏙️' : '🇬🇧';
-    const folderIcon = FOLDER_ICONS[item.folder || 'General'] || '🗂️';
+    const langFlag    = item.detectedLang === 'hi' ? '🇮🇳'
+                      : item.detectedLang === 'mr' ? '🏙️' : '🇬🇧';
+    const folderIcon  = FOLDER_ICONS[item.folder || 'General'] || '🗂️';
 
     return (
       <TouchableOpacity
         key={item.id}
-        style={styles.card}
+        style={[styles.card, item.matchContext && styles.cardHighlighted]}
         onPress={() => navigation.navigate('Transcript', { transcript: item })}
         activeOpacity={0.85}>
 
@@ -173,21 +204,26 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* AI Bullet Points */}
-        {bullets.length > 0 ? (
-          <View style={styles.bulletsContainer}>
-            {bullets.map((bullet, i) => (
-              <View key={i} style={styles.bulletRow}>
-                <Text style={styles.bulletDot}>•</Text>
-                <Text style={styles.bulletText} numberOfLines={1}>{bullet}</Text>
+        {/* Search match context — shown instead of bullets when searching */}
+        {item.matchContext
+          ? renderMatchContext(item.matchContext)
+          : bullets.length > 0
+            ? (
+              <View style={styles.bulletsContainer}>
+                {bullets.map((bullet, i) => (
+                  <View key={i} style={styles.bulletRow}>
+                    <Text style={styles.bulletDot}>•</Text>
+                    <Text style={styles.bulletText} numberOfLines={1}>{bullet}</Text>
+                  </View>
+                ))}
               </View>
-            ))}
-          </View>
-        ) : (
-          <Text style={styles.cardPreview} numberOfLines={2}>
-            {item.englishText || item.text}
-          </Text>
-        )}
+            )
+            : (
+              <Text style={styles.cardPreview} numberOfLines={2}>
+                {item.englishText || item.text}
+              </Text>
+            )
+        }
 
         {/* Footer */}
         <View style={styles.cardFooter}>
@@ -239,7 +275,10 @@ export default function HomeScreen({ navigation }) {
         <View>
           <Text style={styles.headerTitle}>VoxNote</Text>
           <Text style={styles.headerSub}>
-            {filtered.length} recording{filtered.length !== 1 ? 's' : ''}
+            {isSearching
+              ? `${filtered.length} result${filtered.length !== 1 ? 's' : ''} for "${searchQuery}"`
+              : `${filtered.length} recording${filtered.length !== 1 ? 's' : ''}`
+            }
           </Text>
         </View>
         <TouchableOpacity
@@ -249,14 +288,14 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* ✅ Folder Tabs */}
+      {/* Folder Tabs */}
       <View style={styles.folderTabsWrapper}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.folderTabs}>
           {FOLDERS.map(folder => {
-            const count   = getFolderCount(folder);
+            const count    = getFolderCount(folder);
             const isActive = folder === activeFolder;
             return (
               <TouchableOpacity
@@ -285,7 +324,7 @@ export default function HomeScreen({ navigation }) {
         <Text style={styles.searchIcon}>🔍</Text>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search recordings..."
+          placeholder="Search titles, transcripts, summaries, speakers..."
           placeholderTextColor="#888"
           value={searchQuery}
           onChangeText={handleSearch}
@@ -299,34 +338,37 @@ export default function HomeScreen({ navigation }) {
 
       {/* Action Buttons */}
       <View style={styles.actions}>
-  <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Record')}>
-    <Text style={styles.btnText}>🎙 Record</Text>
-  </TouchableOpacity>
-  <TouchableOpacity
-    style={[styles.btn, { backgroundColor: '#C0392B' }]}
-    onPress={() => navigation.navigate('Live')}>
-    <Text style={styles.btnText}>🔴 Live</Text>
-  </TouchableOpacity>
-  <TouchableOpacity
-    style={[styles.btn, styles.btnSecondary]}
-    onPress={() => navigation.navigate('Upload')}>
-    <Text style={[styles.btnText, styles.btnTextSecondary]}>📁 Upload</Text>
-  </TouchableOpacity>
-</View>
+        <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Record')}>
+          <Text style={styles.btnText}>🎙 Record</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.btn, { backgroundColor: '#C0392B' }]}
+          onPress={() => navigation.navigate('Live')}>
+          <Text style={styles.btnText}>🔴 Live</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnSecondary]}
+          onPress={() => navigation.navigate('Upload')}>
+          <Text style={[styles.btnText, styles.btnTextSecondary]}>📁 Upload</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Content */}
       {filtered.length === 0 && searchQuery.length > 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>🔍</Text>
           <Text style={styles.emptyTitle}>No results found</Text>
-          <Text style={styles.emptySubtitle}>No recordings found for "{searchQuery}"</Text>
+          <Text style={styles.emptySubtitle}>
+            No recordings match "{searchQuery}"{'\n'}
+            Try searching for a speaker name, topic, or keyword
+          </Text>
         </View>
       ) : filtered.length === 0 && activeFolder !== 'All' ? (
         <View style={styles.empty}>
           <Text style={styles.emptyIcon}>{FOLDER_ICONS[activeFolder]}</Text>
           <Text style={styles.emptyTitle}>No recordings in {activeFolder}</Text>
           <Text style={styles.emptySubtitle}>
-            Open any recording and tap "Move to Folder" to organise it here
+            Open any recording and tap the folder badge to organise it here
           </Text>
         </View>
       ) : filtered.length === 0 ? (
@@ -357,21 +399,21 @@ const styles = StyleSheet.create({
                    backgroundColor: '#1A6FC4', justifyContent: 'center', alignItems: 'center' },
   headerMicIcon: { fontSize: 20 },
 
-  // ✅ Folder Tabs
+  // Folder Tabs
   folderTabsWrapper: { backgroundColor: '#0D3B7A', paddingBottom: 12 },
   folderTabs:    { paddingHorizontal: 16, gap: 8, flexDirection: 'row' },
   folderTab:     { flexDirection: 'row', alignItems: 'center', gap: 4,
                    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20,
                    backgroundColor: 'rgba(255,255,255,0.15)' },
-  folderTabActive: { backgroundColor: '#FFFFFF' },
-  folderTabIcon: { fontSize: 13 },
-  folderTabText: { fontSize: 12, color: '#AACFEE', fontWeight: '600' },
+  folderTabActive:     { backgroundColor: '#FFFFFF' },
+  folderTabIcon:       { fontSize: 13 },
+  folderTabText:       { fontSize: 12, color: '#AACFEE', fontWeight: '600' },
   folderTabTextActive: { color: '#0D3B7A' },
-  folderCount:   { backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 10,
-                   paddingHorizontal: 6, paddingVertical: 1, marginLeft: 2 },
-  folderCountActive: { backgroundColor: '#0D3B7A' },
-  folderCountText:   { fontSize: 10, color: '#FFFFFF', fontWeight: 'bold' },
-  folderCountTextActive: { color: '#FFFFFF' },
+  folderCount:         { backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 10,
+                         paddingHorizontal: 6, paddingVertical: 1, marginLeft: 2 },
+  folderCountActive:      { backgroundColor: '#0D3B7A' },
+  folderCountText:        { fontSize: 10, color: '#FFFFFF', fontWeight: 'bold' },
+  folderCountTextActive:  { color: '#FFFFFF' },
 
   // Search
   searchContainer: { flexDirection: 'row', alignItems: 'center',
@@ -383,11 +425,11 @@ const styles = StyleSheet.create({
   clearBtnText:  { fontSize: 16, color: '#888', padding: 4 },
 
   // Action buttons
-  actions:       { flexDirection: 'row', paddingHorizontal: 16, paddingBottom: 8, gap: 12 },
-  btn:           { flex: 1, backgroundColor: '#1A56A0', padding: 12,
-                   borderRadius: 10, alignItems: 'center' },
-  btnSecondary:  { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#1A56A0' },
-  btnText:       { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
+  actions:          { flexDirection: 'row', paddingHorizontal: 16, paddingBottom: 8, gap: 12 },
+  btn:              { flex: 1, backgroundColor: '#1A56A0', padding: 12,
+                      borderRadius: 10, alignItems: 'center' },
+  btnSecondary:     { backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#1A56A0' },
+  btnText:          { color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 },
   btnTextSecondary: { color: '#1A56A0' },
 
   // List
@@ -396,36 +438,48 @@ const styles = StyleSheet.create({
                    marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
 
   // Card
-  card:          { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16,
-                   marginBottom: 10, elevation: 2, shadowColor: '#000',
-                   shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-  cardHeader:    { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
-  avatar:        { width: 38, height: 38, borderRadius: 19, backgroundColor: '#1A56A0',
-                   justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  avatarText:    { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 },
-  cardMeta:      { flex: 1 },
-  cardTitle:     { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 3 },
-  cardSubRow:    { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
-  cardTime:      { fontSize: 12, color: '#888' },
-  cardDuration:  { fontSize: 12, color: '#888' },
-  dot:           { fontSize: 12, color: '#CCC' },
-  langFlag:      { fontSize: 12 },
-  folderIcon:    { fontSize: 12 },
-  deleteBtn:     { padding: 4 },
-  deleteBtnText: { fontSize: 18 },
+  card:            { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16,
+                     marginBottom: 10, elevation: 2, shadowColor: '#000',
+                     shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  cardHighlighted: { borderWidth: 1.5, borderColor: '#1A56A0',
+                     backgroundColor: '#F5F9FF' },
+  cardHeader:      { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
+  avatar:          { width: 38, height: 38, borderRadius: 19, backgroundColor: '#1A56A0',
+                     justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  avatarText:      { color: '#FFFFFF', fontWeight: 'bold', fontSize: 16 },
+  cardMeta:        { flex: 1 },
+  cardTitle:       { fontSize: 16, fontWeight: '700', color: '#111', marginBottom: 3 },
+  cardSubRow:      { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
+  cardTime:        { fontSize: 12, color: '#888' },
+  cardDuration:    { fontSize: 12, color: '#888' },
+  dot:             { fontSize: 12, color: '#CCC' },
+  langFlag:        { fontSize: 12 },
+  folderIcon:      { fontSize: 12 },
+  deleteBtn:       { padding: 4 },
+  deleteBtnText:   { fontSize: 18 },
 
+  // Search match context
+  matchBox:        { backgroundColor: '#EEF4FF', borderRadius: 8,
+                     padding: 10, marginBottom: 10 },
+  matchBadge:      { alignSelf: 'flex-start', backgroundColor: '#1A56A0',
+                     borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3,
+                     marginBottom: 6 },
+  matchBadgeText:  { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  matchSnippet:    { fontSize: 13, color: '#444', lineHeight: 19, fontStyle: 'italic' },
+
+  // Bullets
   bulletsContainer: { marginBottom: 10 },
-  bulletRow:     { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
-  bulletDot:     { fontSize: 14, color: '#1A56A0', marginRight: 8, marginTop: 1 },
-  bulletText:    { flex: 1, fontSize: 13, color: '#444', lineHeight: 20 },
-  cardPreview:   { fontSize: 13, color: '#666', lineHeight: 20, marginBottom: 10 },
+  bulletRow:        { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 },
+  bulletDot:        { fontSize: 14, color: '#1A56A0', marginRight: 8, marginTop: 1 },
+  bulletText:       { flex: 1, fontSize: 13, color: '#444', lineHeight: 20 },
+  cardPreview:      { fontSize: 13, color: '#666', lineHeight: 20, marginBottom: 10 },
 
-  cardFooter:    { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  footerBadge:   { backgroundColor: '#EEF3FC', paddingHorizontal: 10,
-                   paddingVertical: 4, borderRadius: 20 },
+  cardFooter:      { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  footerBadge:     { backgroundColor: '#EEF3FC', paddingHorizontal: 10,
+                     paddingVertical: 4, borderRadius: 20 },
   footerBadgeText: { fontSize: 11, color: '#1A56A0', fontWeight: '600' },
-  aiBadge:       { backgroundColor: '#D6F0E2' },
-  aiBadgeText:   { color: '#1A7A4A' },
+  aiBadge:         { backgroundColor: '#D6F0E2' },
+  aiBadgeText:     { color: '#1A7A4A' },
 
   // Empty state
   empty:         { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
