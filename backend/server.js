@@ -315,7 +315,8 @@ const processTranscript = async (transcript) => {
   const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
 
   console.log('Generating smart title...');
-  const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
+const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
+console.log('Smart title result:', smartTitle);
 
   return {
     success:      true,
