@@ -1,3 +1,4 @@
+import { Linking } from 'react-native';
 import React, { useState, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
@@ -154,7 +155,30 @@ export default function TranscriptScreen({ route }) {
       Alert.alert('Error', err.message);
     }
   };
-
+const generateShareLink = async () => {
+  try {
+    Alert.alert('Generating link...', 'Please wait');
+    const response = await fetch(
+      'https://transcript-app-lbpe.onrender.com/share/generate',
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ transcriptId: transcript.id }),
+      }
+    );
+    const data = await response.json();
+    if (data.success) {
+      await Share.share({
+        message: `📝 ${transcript.title}\n\nView transcript: ${data.shareUrl}`,
+        title:   transcript.title,
+      });
+    } else {
+      Alert.alert('Error', 'Could not generate share link');
+    }
+  } catch (err) {
+    Alert.alert('Error', err.message);
+  }
+};
   // ─── PDF Export ───
   const exportAsPDF = async () => {
     try {

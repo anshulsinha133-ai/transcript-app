@@ -141,9 +141,17 @@ export default function RecordScreen({ navigation }) {
             setStatusText('Error saving transcript. Please try again.');
           }
 
-        } else {
-          setStatusText('Error: ' + (result.error || 'Unknown error'));
-        }
+        } else if (result.canResume) {
+  // ✅ Network dropped but job is safe — show resume option
+  setStatusText('Network lost — recording safe ✅');
+  Alert.alert(
+    '📡 Network Lost',
+    'Your recording was uploaded and is being processed.\n\nGo back to Home — you will see a "Resume" button to fetch your transcript when connection is restored.',
+    [{ text: 'Go to Home', onPress: () => navigation.navigate('Home') }]
+  );
+} else {
+  setStatusText('Error: ' + (result.error || 'Unknown error'));
+}
       }
 
     } catch (err) {

@@ -1,7 +1,45 @@
 ﻿import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const OPENAI_API_KEY = '';
 const RENDER_URL = 'https://transcript-app-lbpe.onrender.com';
+
+// ─── Keys for AsyncStorage ───
+const PENDING_JOB_KEY = 'voxnote_pending_job';
+
+// ─── Save pending job to phone storage ───
+const savePendingJob = async (jobId, uri) => {
+  try {
+    await AsyncStorage.setItem(PENDING_JOB_KEY, JSON.stringify({
+      jobId,
+      uri,
+      startedAt: new Date().toISOString(),
+    }));
+    console.log('Pending job saved to phone:', jobId);
+  } catch (err) {
+    console.error('Failed to save pending job:', err.message);
+  }
+};
+
+// ─── Clear pending job from phone storage ───
+const clearPendingJob = async () => {
+  try {
+    await AsyncStorage.removeItem(PENDING_JOB_KEY);
+    console.log('Pending job cleared');
+  } catch (err) {
+    console.error('Failed to clear pending job:', err.message);
+  }
+};
+
+// ─── Get pending job from phone storage ───
+export const getPendingJob = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_JOB_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    console.error('Failed to get pending job:', err.message);
+    return null;
+  }
+};
 
 // ─── Health check ───
 export const checkServerHealth = async () => {
@@ -75,9 +113,7 @@ export const getRealtimeToken = async () => {
   }
 };
 
-// ─── Step 1: Start transcription job (returns immediately) ───
-// ✅ Fixes timeout for long recordings — no more 30-second limit!
-// Returns jobId which is used to poll for status
+// ─── Step 1: Start transcription job ───
 export const startTranscription = async (uri, onProgress = null) => {
   try {
     if (onProgress) onProgress('Uploading audio...', 10);
@@ -95,8 +131,8 @@ export const startTranscription = async (uri, onProgress = null) => {
       `${RENDER_URL}/transcribe-start`,
       formData,
       {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 120000, // 2 min for upload only
+        headers:          { 'Content-Type': 'multipart/form-data' },
+        timeout:          180000, // ✅ 3 min for large file upload
         transformRequest: (data) => data,
       }
     );
@@ -105,8 +141,13 @@ export const startTranscription = async (uri, onProgress = null) => {
       throw new Error(response.data.error || 'Failed to start transcription');
     }
 
-    console.log('Job started, ID:', response.data.jobId);
-    return { success: true, jobId: response.data.jobId };
+    const jobId = response.data.jobId;
+    console.log('Job started, ID:', jobId);
+
+    // ✅ Save jobId to phone immediately — so we can recover if network drops
+    await savePendingJob(jobId, uri);
+
+    return { success: true, jobId };
 
   } catch (err) {
     console.error('startTranscription error:', err.message);
@@ -115,34 +156,44 @@ export const startTranscription = async (uri, onProgress = null) => {
 };
 
 // ─── Step 2: Poll until job is complete ───
-// Checks status every 5 seconds
-// Works for recordings of ANY length — 1 min, 10 min, 1 hour!
+// ✅ Fixes:
+// - Longer timeout per request (60s)
+// - Exponential backoff on network errors
+// - Stops as soon as result received (no duplicate processing)
+// - Updates progress more accurately
 export const pollTranscription = async (jobId, onProgress = null) => {
-  const maxAttempts = 120; // Max 10 minutes polling (120 × 5 seconds)
-  let attempts      = 0;
+  const maxAttempts    = 180; // ✅ Max 30 min polling (180 × 10 seconds)
+  let attempts         = 0;
+  let networkFailCount = 0;
 
   console.log('Polling job:', jobId);
 
   while (attempts < maxAttempts) {
     try {
-      // Wait 5 seconds between polls
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // ✅ Wait between polls — longer if network has been failing
+      const waitMs = networkFailCount > 3 ? 15000 : 10000;
+      await new Promise(resolve => setTimeout(resolve, waitMs));
       attempts++;
 
       const response = await axios.get(
         `${RENDER_URL}/transcribe-status/${jobId}`,
-        { timeout: 30000 }
+        { timeout: 60000 } // ✅ 60s timeout per request (was 30s)
       );
+
+      // ✅ Reset network fail count on success
+      networkFailCount = 0;
 
       const data = response.data;
       console.log('Poll attempt', attempts, '- status:', data.status);
 
+      // ✅ Completed — return immediately and clear pending job
       if (data.status === 'completed') {
         if (onProgress) onProgress('Done!', 100);
+        await clearPendingJob(); // ✅ Clear from phone storage
         return {
           success:      true,
           text:         data.text,
-          smartTitle:   data.smartTitle   || null,   // ✅ ADD THIS
+          smartTitle:   data.smartTitle   || null,
           englishText:  data.englishText  || null,
           utterances:   data.utterances   || [],
           words:        data.words        || [],
@@ -154,33 +205,56 @@ export const pollTranscription = async (jobId, onProgress = null) => {
       }
 
       if (data.status === 'error') {
+        await clearPendingJob();
         return { success: false, error: data.error || 'Transcription failed' };
       }
 
-      // Still queued or processing — update progress
+      // ✅ Still processing — update progress
       if (data.status === 'queued') {
-        const pct = Math.min(25 + attempts, 40);
+        const pct = Math.min(25 + attempts, 35);
         if (onProgress) onProgress('Queued — waiting...', pct);
       } else if (data.status === 'processing') {
-        const pct = Math.min(40 + (attempts * 2), 85);
+        const pct = Math.min(35 + attempts, 85);
         if (onProgress) onProgress('Transcribing...', pct);
       }
 
     } catch (err) {
+      networkFailCount++;
       console.error('Poll attempt', attempts, 'error:', err.message);
-      // Continue polling — network hiccups happen
+
+      // ✅ Show user friendly message after 3 consecutive failures
+      if (networkFailCount === 3) {
+        if (onProgress) onProgress('Network issue — retrying...', null);
+      }
+
+      // ✅ After 10 consecutive network failures — stop and tell user to resume later
+      if (networkFailCount >= 10) {
+        console.log('Too many network failures — stopping poll');
+        return {
+          success:   false,
+          error:     'Network lost. Your recording is safe — go to Home and tap "Resume Pending Recording" to try again.',
+          canResume: true,
+          jobId:     jobId,
+        };
+      }
+
+      // ✅ Exponential backoff — wait longer after each failure
+      const backoffMs = Math.min(5000 * networkFailCount, 30000);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
     }
   }
 
-  return { success: false, error: 'Transcription timed out. Please try again.' };
+  return {
+    success:   false,
+    error:     'Transcription timed out. Go to Home and tap "Resume Pending Recording" to try again.',
+    canResume: true,
+    jobId:     jobId,
+  };
 };
 
 // ─── transcribeWithSpeakers ───
-// ✅ Now uses polling for ALL recordings
-// Works for 1 minute OR 1 hour recordings!
 export const transcribeWithSpeakers = async (uri, onProgress = null) => {
   try {
-    // Step 1: Upload and start job
     if (onProgress) onProgress('Uploading audio...', 10);
 
     const startResult = await startTranscription(uri, onProgress);
@@ -189,7 +263,6 @@ export const transcribeWithSpeakers = async (uri, onProgress = null) => {
       return { success: false, error: startResult.error };
     }
 
-    // Step 2: Poll for result
     if (onProgress) onProgress('Processing... please wait', 25);
 
     const result = await pollTranscription(startResult.jobId, onProgress);
@@ -199,5 +272,23 @@ export const transcribeWithSpeakers = async (uri, onProgress = null) => {
   } catch (err) {
     console.error('transcribeWithSpeakers error:', err.message);
     return { success: false, error: err.message || 'Transcription failed' };
+  }
+};
+
+// ─── Resume a pending job (called from HomeScreen) ───
+export const resumePendingTranscription = async (onProgress = null) => {
+  try {
+    const pending = await getPendingJob();
+    if (!pending) return { success: false, error: 'No pending job found' };
+
+    console.log('Resuming pending job:', pending.jobId);
+    if (onProgress) onProgress('Resuming transcription...', 30);
+
+    const result = await pollTranscription(pending.jobId, onProgress);
+    return result;
+
+  } catch (err) {
+    console.error('resumePendingTranscription error:', err.message);
+    return { success: false, error: err.message };
   }
 };

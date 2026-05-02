@@ -2,10 +2,11 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
   StyleSheet, SafeAreaView, Alert, StatusBar, TextInput,
-  ScrollView
+  ScrollView, ActivityIndicator
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { getAllTranscripts, deleteTranscript, searchTranscripts } from '../utils/storage';
+import { getAllTranscripts, deleteTranscript, searchTranscripts, saveTranscript, createTranscriptObj } from '../utils/storage';
+import { getPendingJob, resumePendingTranscription } from '../services/api';
 
 // ─── Folder tabs ───
 const FOLDERS = ['All', 'General', 'Work', 'Personal', 'Meetings', 'Lectures'];
@@ -73,11 +74,14 @@ const MATCH_LABELS = {
 };
 
 export default function HomeScreen({ navigation }) {
-  const [transcripts,   setTranscripts]   = useState([]);
-  const [searchQuery,   setSearchQuery]   = useState('');
-  const [filtered,      setFiltered]      = useState([]);
-  const [activeFolder,  setActiveFolder]  = useState('All');
-  const [isSearching,   setIsSearching]   = useState(false);
+  const [transcripts,    setTranscripts]    = useState([]);
+  const [searchQuery,    setSearchQuery]    = useState('');
+  const [filtered,       setFiltered]       = useState([]);
+  const [activeFolder,   setActiveFolder]   = useState('All');
+  const [isSearching,    setIsSearching]    = useState(false);
+  const [pendingJob,     setPendingJob]     = useState(null);
+  const [resuming,       setResuming]       = useState(false);
+  const [resumeStatus,   setResumeStatus]   = useState('');
 
   useFocusEffect(useCallback(() => {
     const loadTranscripts = async () => {
@@ -86,23 +90,25 @@ export default function HomeScreen({ navigation }) {
       applyFilters(data, searchQuery, activeFolder);
     };
     loadTranscripts();
+
+    // ✅ Check for pending job on every screen focus
+    const checkPending = async () => {
+      const pending = await getPendingJob();
+      setPendingJob(pending);
+    };
+    checkPending();
   }, []));
 
   const applyFilters = (data, query, folder) => {
     let results = data;
-
-    // Filter by folder
     if (folder !== 'All') {
       results = results.filter(t => (t.folder || 'General') === folder);
     }
-
-    // Full-text search across all fields
     if (query.trim()) {
       results = searchTranscripts(results, query);
     } else {
       results = results.map(t => ({ ...t, matchContext: null }));
     }
-
     setFiltered(results);
   };
 
@@ -129,6 +135,76 @@ export default function HomeScreen({ navigation }) {
         }
       }
     ]);
+  };
+
+  // ─── Resume pending transcription ───
+  const handleResume = async () => {
+    setResuming(true);
+    setResumeStatus('Connecting to server...');
+
+    try {
+      const result = await resumePendingTranscription((msg, pct) => {
+        setResumeStatus(pct ? `${msg} ${pct}%` : msg);
+      });
+
+      if (result.success) {
+        setResumeStatus('Saving transcript...');
+
+        const title = result.smartTitle ||
+          'Recording ' + new Date().toLocaleDateString('en-IN');
+
+        const text = result.englishText ||
+          result.text ||
+          result.utterances?.map(u => u.englishText || u.text).join(' ') ||
+          'Recording saved';
+
+        const obj = {
+          ...createTranscriptObj(title, text, result.duration || 0),
+          utterances:   result.utterances   || [],
+          words:        result.words        || [],
+          audioPath:    null,
+          originalText: result.text,
+          englishText:  result.englishText  || null,
+          autoSummary:  result.autoSummary  || null,
+          actionItems:  result.actionItems  || [],
+          detectedLang: result.detectedLang || 'en',
+          mode:         result.detectedLang !== 'en' ? 'auto' : 'en',
+        };
+
+        const saved = await saveTranscript(obj);
+        if (saved && saved.success) {
+          obj.id = saved.id;
+          setPendingJob(null);
+          setResuming(false);
+          setResumeStatus('');
+
+          // Reload transcripts
+          const data = await getAllTranscripts();
+          setTranscripts(data);
+          applyFilters(data, searchQuery, activeFolder);
+
+          Alert.alert('✅ Recovered!', `"${title}" has been saved successfully.`);
+        } else {
+          setResuming(false);
+          setResumeStatus('');
+          Alert.alert('Error', 'Transcript recovered but could not be saved. Try again.');
+        }
+
+      } else if (result.canResume) {
+        setResuming(false);
+        setResumeStatus('');
+        Alert.alert('Still Processing', 'Your recording is still being transcribed. Try again in a minute.');
+      } else {
+        setResuming(false);
+        setResumeStatus('');
+        Alert.alert('Error', result.error || 'Could not resume transcription.');
+      }
+
+    } catch (err) {
+      setResuming(false);
+      setResumeStatus('');
+      Alert.alert('Error', err.message);
+    }
   };
 
   // ─── Folder count badges ───
@@ -177,7 +253,6 @@ export default function HomeScreen({ navigation }) {
         onPress={() => navigation.navigate('Transcript', { transcript: item })}
         activeOpacity={0.85}>
 
-        {/* Card Header */}
         <View style={styles.cardHeader}>
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>
@@ -204,7 +279,6 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* Search match context — shown instead of bullets when searching */}
         {item.matchContext
           ? renderMatchContext(item.matchContext)
           : bullets.length > 0
@@ -225,7 +299,6 @@ export default function HomeScreen({ navigation }) {
             )
         }
 
-        {/* Footer */}
         <View style={styles.cardFooter}>
           {item.utterances?.length > 0 && (
             <View style={styles.footerBadge}>
@@ -287,6 +360,29 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.headerMicIcon}>🎙️</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ✅ Pending Job Recovery Banner */}
+      {pendingJob && (
+        <TouchableOpacity
+          style={[styles.resumeBanner, resuming && { opacity: 0.7 }]}
+          onPress={handleResume}
+          disabled={resuming}>
+          {resuming ? (
+            <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 10 }} />
+          ) : (
+            <Text style={styles.resumeIcon}>⏳</Text>
+          )}
+          <View style={styles.resumeTextWrapper}>
+            <Text style={styles.resumeTitle}>
+              {resuming ? 'Recovering recording...' : 'Pending recording found'}
+            </Text>
+            <Text style={styles.resumeSubtitle}>
+              {resuming ? resumeStatus : 'Tap to resume transcription'}
+            </Text>
+          </View>
+          {!resuming && <Text style={styles.resumeArrow}>›</Text>}
+        </TouchableOpacity>
+      )}
 
       {/* Folder Tabs */}
       <View style={styles.folderTabsWrapper}>
@@ -399,6 +495,15 @@ const styles = StyleSheet.create({
                    backgroundColor: '#1A6FC4', justifyContent: 'center', alignItems: 'center' },
   headerMicIcon: { fontSize: 20 },
 
+  // ✅ Resume Banner
+  resumeBanner:      { backgroundColor: '#E65100', flexDirection: 'row', alignItems: 'center',
+                       paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  resumeIcon:        { fontSize: 20 },
+  resumeTextWrapper: { flex: 1 },
+  resumeTitle:       { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  resumeSubtitle:    { color: '#FFD0B0', fontSize: 12, marginTop: 2 },
+  resumeArrow:       { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
+
   // Folder Tabs
   folderTabsWrapper: { backgroundColor: '#0D3B7A', paddingBottom: 12 },
   folderTabs:    { paddingHorizontal: 16, gap: 8, flexDirection: 'row' },
@@ -441,8 +546,7 @@ const styles = StyleSheet.create({
   card:            { backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16,
                      marginBottom: 10, elevation: 2, shadowColor: '#000',
                      shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-  cardHighlighted: { borderWidth: 1.5, borderColor: '#1A56A0',
-                     backgroundColor: '#F5F9FF' },
+  cardHighlighted: { borderWidth: 1.5, borderColor: '#1A56A0', backgroundColor: '#F5F9FF' },
   cardHeader:      { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
   avatar:          { width: 38, height: 38, borderRadius: 19, backgroundColor: '#1A56A0',
                      justifyContent: 'center', alignItems: 'center', marginRight: 12 },
@@ -459,11 +563,9 @@ const styles = StyleSheet.create({
   deleteBtnText:   { fontSize: 18 },
 
   // Search match context
-  matchBox:        { backgroundColor: '#EEF4FF', borderRadius: 8,
-                     padding: 10, marginBottom: 10 },
+  matchBox:        { backgroundColor: '#EEF4FF', borderRadius: 8, padding: 10, marginBottom: 10 },
   matchBadge:      { alignSelf: 'flex-start', backgroundColor: '#1A56A0',
-                     borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3,
-                     marginBottom: 6 },
+                     borderRadius: 12, paddingHorizontal: 10, paddingVertical: 3, marginBottom: 6 },
   matchBadgeText:  { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   matchSnippet:    { fontSize: 13, color: '#444', lineHeight: 19, fontStyle: 'italic' },
 
