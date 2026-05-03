@@ -145,6 +145,78 @@ Rules:
   }
 });
 
+// ─── Generate Follow-up Email ───
+app.post('/generate-email', async (req, res) => {
+  const { transcript, summary, actionItems, title, date } = req.body;
+  if (!transcript) return res.status(400).json({ success: false, error: 'No transcript provided' });
+
+  try {
+    // Build action items text
+    let actionItemsText = '';
+    if (actionItems && actionItems.length > 0) {
+      actionItemsText = actionItems.map((item, i) => {
+        let line = `${i + 1}. ${item.task}`;
+        if (item.owner)    line += ` (Owner: ${item.owner})`;
+        if (item.deadline) line += ` (Due: ${item.deadline})`;
+        return line;
+      }).join('\n');
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a professional email writer for Indian businesses.
+Generate a polished follow-up email after a meeting.
+Rules:
+1. Write in clear professional English
+2. Subject line should be: "Follow-up: [Meeting Title]"
+3. Include: brief greeting, meeting summary, action items with owners, next steps, professional closing
+4. Keep it concise — max 250 words
+5. Format: Subject on first line, then blank line, then email body
+6. Use Indian business context — formal but friendly tone
+7. Return ONLY the email — no extra commentary`
+        },
+        {
+          role: 'user',
+          content: `Generate a follow-up email for this meeting:
+
+Title: ${title || 'Meeting'}
+Date: ${date || new Date().toLocaleDateString('en-IN')}
+
+Summary:
+${summary || transcript.substring(0, 1000)}
+
+Action Items:
+${actionItemsText || 'None identified'}
+
+Write the complete follow-up email now.`
+        }
+      ],
+      max_tokens: 600,
+    });
+
+    const emailContent = completion.choices[0].message.content.trim();
+
+    // Extract subject and body
+    const lines     = emailContent.split('\n');
+    const subjectLine = lines[0].replace(/^Subject:\s*/i, '').trim();
+    const body      = lines.slice(2).join('\n').trim();
+
+    res.json({
+      success: true,
+      subject: subjectLine,
+      body:    body,
+      full:    emailContent,
+    });
+
+  } catch (err) {
+    console.error('/generate-email error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── SHARE: Generate share link ───
 app.post('/share/generate', async (req, res) => {
   const { transcriptId } = req.body;
@@ -500,7 +572,6 @@ const processTranscript = async (transcript) => {
 };
 
 // ─── ROUTE 1: Start transcription job ───
-// ✅ Now submits with webhook URL so AssemblyAI calls us when done
 app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
@@ -524,12 +595,11 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
       format_text:        true,
       punctuate:          true,
       speech_models:      ['universal-3-pro', 'universal-2'],
-      webhook_url:        webhookUrl, // ✅ AssemblyAI will call this when done
+      webhook_url:        webhookUrl,
     });
 
     console.log('Job submitted with webhook! ID:', job.id);
 
-    // ✅ Save job as processing in Supabase immediately
     await supabase.from('transcription_jobs').insert({
       id:     job.id,
       status: 'processing',
@@ -544,26 +614,21 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ─── WEBHOOK: AssemblyAI calls this when transcription is done ───
-// ✅ This is the key fix — no more duplicate processing!
-// AssemblyAI calls this once → we process once → store result in Supabase
+// ─── WEBHOOK: AssemblyAI calls this when done ───
 app.post('/webhook/assemblyai', async (req, res) => {
   try {
     const { transcript_id, status } = req.body;
     console.log('Webhook received! Job:', transcript_id, 'Status:', status);
 
-    // Respond immediately so AssemblyAI doesn't retry
     res.json({ success: true });
 
     if (status !== 'completed') {
-      console.log('Webhook status not completed:', status);
       await supabase.from('transcription_jobs')
         .update({ status })
         .eq('id', transcript_id);
       return;
     }
 
-    // ✅ Check if already processed — prevents duplicate processing
     const { data: existingJob } = await supabase
       .from('transcription_jobs')
       .select('status, result')
@@ -575,20 +640,14 @@ app.post('/webhook/assemblyai', async (req, res) => {
       return;
     }
 
-    // ✅ Fetch full transcript from AssemblyAI
     console.log('Fetching transcript from AssemblyAI...');
     const transcript = await aai.transcripts.get(transcript_id);
 
-    if (transcript.status !== 'completed') {
-      console.log('Transcript not ready yet:', transcript.status);
-      return;
-    }
+    if (transcript.status !== 'completed') return;
 
-    // ✅ Process ONCE — translate, summarize, title
     console.log('Processing transcript (webhook)...');
     const result = await processTranscript(transcript);
 
-    // ✅ Store result in Supabase — phone fetches this instead of reprocessing
     await supabase.from('transcription_jobs')
       .update({
         status:       'done',
@@ -605,13 +664,11 @@ app.post('/webhook/assemblyai', async (req, res) => {
 });
 
 // ─── ROUTE 2: Poll job status ───
-// ✅ Now checks Supabase cache first — no more reprocessing!
 app.get('/transcribe-status/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
     console.log('Checking status for job:', jobId);
 
-    // ✅ Check Supabase cache first
     const { data: cachedJob } = await supabase
       .from('transcription_jobs')
       .select('status, result')
@@ -623,7 +680,6 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
       return res.json(cachedJob.result);
     }
 
-    // ✅ Not done yet — check AssemblyAI for current status
     const transcript = await aai.transcripts.get(jobId);
     console.log('AssemblyAI job status:', transcript.status);
 
@@ -638,9 +694,7 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
       return res.json({ success: true, status: transcript.status });
     }
 
-    // ✅ Completed but webhook hasn't fired yet — process now and cache
     if (transcript.status === 'completed') {
-      // Check again if another request already processed it
       const { data: recheckJob } = await supabase
         .from('transcription_jobs')
         .select('status, result')
@@ -648,14 +702,12 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         .single();
 
       if (recheckJob?.status === 'done' && recheckJob?.result) {
-        console.log('Returning cached result (recheck) for job:', jobId);
         return res.json(recheckJob.result);
       }
 
       console.log('Processing completed transcript (fallback)...');
       const result = await processTranscript(transcript);
 
-      // ✅ Cache it so this never runs again for this job
       await supabase.from('transcription_jobs')
         .update({
           status:       'done',
@@ -675,21 +727,16 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
   }
 });
 
-// ─── ROUTE 3: Old sync route (kept for short recordings) ───
+// ─── ROUTE 3: Old sync route ───
 app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
     if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
 
     console.log('Audio file received:', req.file.originalname);
-    console.log('File size:', req.file.size, 'bytes');
-
-    console.log('Step 1: Uploading to AssemblyAI...');
     const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
     fs.unlinkSync(tempPath);
-    console.log('Uploaded:', uploadUrl);
 
-    console.log('Step 2: Transcribing...');
     const transcript = await aai.transcripts.transcribe({
       audio:              uploadUrl,
       speaker_labels:     true,
@@ -703,7 +750,6 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
     if (transcript.status === 'error') throw new Error('AssemblyAI error: ' + transcript.error);
 
     const result = await processTranscript(transcript);
-    console.log('Processing complete!');
     res.json(result);
 
   } catch (err) {

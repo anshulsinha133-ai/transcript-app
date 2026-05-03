@@ -12,7 +12,6 @@ import * as Sharing from 'expo-sharing';
 import { summarizeTranscript, chatWithTranscripts } from '../services/api';
 import { updateSpeakerNames, updateTranscriptFolder } from '../utils/storage';
 
-// ─── Folder options ───
 const FOLDERS = ['General', 'Work', 'Personal', 'Meetings', 'Lectures'];
 const FOLDER_ICONS = {
   General:  '🗂️',
@@ -22,7 +21,6 @@ const FOLDER_ICONS = {
   Lectures: '🎓',
 };
 
-// ─── Dynamic speaker colors ───
 const SPEAKER_COLORS = [
   '#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF',
   '#C0392B', '#0097A7', '#795548', '#E91E63'
@@ -42,24 +40,23 @@ const getSpeakerIndex = (speaker) => {
 export default function TranscriptScreen({ route }) {
   const { transcript } = route.params;
 
-  const [summary,        setSummary]        = useState(transcript.autoSummary || null);
-  const [loadingSummary, setLoadingSummary] = useState(false);
-  const [showOriginal,   setShowOriginal]   = useState(false);
-  const [showChat,       setShowChat]       = useState(false);
-  const [chatMessages,   setChatMessages]   = useState([]);
-  const [chatInput,      setChatInput]      = useState('');
-  const [chatLoading,    setChatLoading]    = useState(false);
-  const [exportingPDF,   setExportingPDF]   = useState(false);
-  const [sharingLink,    setSharingLink]    = useState(false);
+  const [summary,          setSummary]          = useState(transcript.autoSummary || null);
+  const [loadingSummary,   setLoadingSummary]   = useState(false);
+  const [showOriginal,     setShowOriginal]     = useState(false);
+  const [showChat,         setShowChat]         = useState(false);
+  const [chatMessages,     setChatMessages]     = useState([]);
+  const [chatInput,        setChatInput]        = useState('');
+  const [chatLoading,      setChatLoading]      = useState(false);
+  const [exportingPDF,     setExportingPDF]     = useState(false);
+  const [sharingLink,      setSharingLink]      = useState(false);
+  const [generatingEmail,  setGeneratingEmail]  = useState(false); // ✅ NEW
 
-  // Speaker naming
   const [utterances,      setUtterances]      = useState(transcript.utterances || []);
   const [renamingModal,   setRenamingModal]   = useState(false);
   const [renamingSpeaker, setRenamingSpeaker] = useState('');
   const [newSpeakerName,  setNewSpeakerName]  = useState('');
   const [savingName,      setSavingName]      = useState(false);
 
-  // Folder state
   const [currentFolder, setCurrentFolder] = useState(transcript.folder || 'General');
   const [folderModal,   setFolderModal]   = useState(false);
   const [savingFolder,  setSavingFolder]  = useState(false);
@@ -70,7 +67,6 @@ export default function TranscriptScreen({ route }) {
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
 
-  // ─── Speaker rename ───
   const handleSpeakerTap = (speaker) => {
     setRenamingSpeaker(speaker);
     setNewSpeakerName('');
@@ -92,7 +88,6 @@ export default function TranscriptScreen({ route }) {
     setSavingName(false);
   };
 
-  // ─── Folder update ───
   const saveFolder = async (folder) => {
     setSavingFolder(true);
     const result = await updateTranscriptFolder(transcript.id, folder);
@@ -184,15 +179,52 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
+  // ─── Generate Follow-up Email ───
+  const generateFollowUpEmail = async () => {
+    try {
+      setGeneratingEmail(true);
+      const response = await fetch(
+        'https://transcript-app-lbpe.onrender.com/generate-email',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transcript:  transcript.englishText || transcript.text,
+            summary:     summary || transcript.autoSummary,
+            actionItems: transcript.actionItems || [],
+            title:       transcript.title,
+            date:        formatDate(transcript.createdAt),
+          }),
+        }
+      );
+      const data = await response.json();
+      if (data.success) {
+        const subject = encodeURIComponent(data.subject);
+        const body    = encodeURIComponent(data.body);
+        const mailUrl = `mailto:?subject=${subject}&body=${body}`;
+        const canOpen = await Linking.canOpenURL(mailUrl);
+        if (canOpen) {
+          await Linking.openURL(mailUrl);
+        } else {
+          await Clipboard.setStringAsync(`Subject: ${data.subject}\n\n${data.body}`);
+          Alert.alert('✅ Email Copied!', 'Email content copied to clipboard. Paste it in your email app.');
+        }
+      } else {
+        Alert.alert('Error', 'Could not generate email. Try again.');
+      }
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setGeneratingEmail(false);
+    }
+  };
+
   // ─── PDF Export ───
   const exportAsPDF = async () => {
     try {
       setExportingPDF(true);
-
       const date     = formatDate(transcript.createdAt);
-      const duration = transcript.duration
-        ? Math.round(transcript.duration / 60) + ' min'
-        : 'N/A';
+      const duration = transcript.duration ? Math.round(transcript.duration / 60) + ' min' : 'N/A';
       const words    = transcript.wordCount || 0;
       const lang     = getLangBadge();
 
@@ -204,20 +236,17 @@ export default function TranscriptScreen({ route }) {
             <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#333;">${item.task}</td>
             <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
             <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
-          </tr>
-        `).join('');
+          </tr>`).join('');
         actionItemsHTML = `
           <div class="section">
             <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">✅ Action Items</div>
             <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;overflow:hidden;">
-              <thead>
-                <tr style="background:#FF9800;">
-                  <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
-                  <th style="padding:10px;color:#fff;text-align:left;">Task</th>
-                  <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
-                  <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
-                </tr>
-              </thead>
+              <thead><tr style="background:#FF9800;">
+                <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
+                <th style="padding:10px;color:#fff;text-align:left;">Task</th>
+                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
+                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
+              </tr></thead>
               <tbody>${rows}</tbody>
             </table>
           </div>`;
@@ -229,10 +258,7 @@ export default function TranscriptScreen({ route }) {
         summaryHTML = `
           <div class="section">
             <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
-            <div style="background:#F0FAF4;padding:16px;border-radius:8px;
-                        font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">
-              ${summaryContent}
-            </div>
+            <div style="background:#F0FAF4;padding:16px;border-radius:8px;font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">${summaryContent}</div>
           </div>`;
       }
 
@@ -247,14 +273,11 @@ export default function TranscriptScreen({ route }) {
           return `
             <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;
-                             border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
+                <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
                 <span style="font-size:11px;color:#888;">${start} — ${end}</span>
               </div>
               <div style="font-size:14px;color:#333;line-height:1.7;">${u.englishText || u.text}</div>
-              ${u.englishText && u.englishText !== u.text
-                ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>`
-                : ''}
+              ${u.englishText && u.englishText !== u.text ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>` : ''}
             </div>`;
         }).join('');
         transcriptHTML = `
@@ -266,40 +289,28 @@ export default function TranscriptScreen({ route }) {
         transcriptHTML = `
           <div class="section">
             <div class="section-title">📝 Full Transcript</div>
-            <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">
-              ${transcript.englishText || transcript.text}
-            </div>
+            <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">${transcript.englishText || transcript.text}</div>
           </div>`;
       }
 
-      const html = `
-        <!DOCTYPE html>
-        <html>
+      const html = `<!DOCTYPE html><html>
         <head>
           <meta charset="utf-8"/>
           <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
           <style>
             * { margin:0; padding:0; box-sizing:border-box; }
-            body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-                   background:#fff; color:#333; }
-            .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0);
-                      color:white; padding:32px 40px; }
-            .logo { font-size:13px; font-weight:700; letter-spacing:2px;
-                    color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
+            body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#fff; color:#333; }
+            .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0); color:white; padding:32px 40px; }
+            .logo { font-size:13px; font-weight:700; letter-spacing:2px; color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
             .title { font-size:24px; font-weight:800; margin-bottom:16px; line-height:1.3; }
             .meta-grid { display:flex; gap:24px; flex-wrap:wrap; }
-            .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px;
-                         border-radius:8px; font-size:12px; }
-            .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase;
-                          letter-spacing:1px; margin-bottom:2px; }
+            .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px; border-radius:8px; font-size:12px; }
+            .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px; }
             .meta-value { color:#fff; font-weight:600; }
             .body { padding:32px 40px; }
             .section { margin-bottom:32px; }
-            .section-title { font-size:16px; font-weight:700; color:#0D3B7A;
-                             margin-bottom:16px; padding-left:12px;
-                             border-left:4px solid #1A56A0; }
-            .footer { margin-top:40px; padding:20px 40px; border-top:1px solid #EEE;
-                      text-align:center; font-size:11px; color:#AAA; }
+            .section-title { font-size:16px; font-weight:700; color:#0D3B7A; margin-bottom:16px; padding-left:12px; border-left:4px solid #1A56A0; }
+            .footer { margin-top:40px; padding:20px 40px; border-top:1px solid #EEE; text-align:center; font-size:11px; color:#AAA; }
           </style>
         </head>
         <body>
@@ -314,25 +325,14 @@ export default function TranscriptScreen({ route }) {
               <div class="meta-item"><div class="meta-label">Folder</div><div class="meta-value">${currentFolder}</div></div>
             </div>
           </div>
-          <div class="body">
-            ${summaryHTML}
-            ${actionItemsHTML}
-            ${transcriptHTML}
-          </div>
-          <div class="footer">
-            Generated by VoxNote AI Transcription App • ${new Date().toLocaleDateString('en-IN')}
-          </div>
-        </body>
-        </html>`;
+          <div class="body">${summaryHTML}${actionItemsHTML}${transcriptHTML}</div>
+          <div class="footer">Generated by VoxNote AI Transcription App • ${new Date().toLocaleDateString('en-IN')}</div>
+        </body></html>`;
 
       const { uri } = await Print.printToFileAsync({ html, base64: false });
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
-        await Sharing.shareAsync(uri, {
-          mimeType:    'application/pdf',
-          dialogTitle: 'Share or Save PDF',
-          UTI:         'com.adobe.pdf',
-        });
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Share or Save PDF', UTI: 'com.adobe.pdf' });
       } else {
         Alert.alert('PDF Created', 'Saved to: ' + uri);
       }
@@ -355,7 +355,6 @@ export default function TranscriptScreen({ route }) {
     setLoadingSummary(false);
   };
 
-  // ─── Chat ───
   const sendChatMessage = async () => {
     const question = chatInput.trim();
     if (!question || chatLoading) return;
@@ -399,10 +398,8 @@ export default function TranscriptScreen({ route }) {
     return 'Auto';
   };
 
-  // ─── Folder Modal ───
   const renderFolderModal = () => (
-    <Modal visible={folderModal} transparent animationType="slide"
-      onRequestClose={() => setFolderModal(false)}>
+    <Modal visible={folderModal} transparent animationType="slide" onRequestClose={() => setFolderModal(false)}>
       <View style={styles.modalOverlay}>
         <View style={styles.modalBox}>
           <View style={styles.modalHeader}>
@@ -412,9 +409,7 @@ export default function TranscriptScreen({ route }) {
             </TouchableOpacity>
           </View>
           <Text style={styles.modalSubtitle}>
-            Currently in: <Text style={{ fontWeight: 'bold' }}>
-              {FOLDER_ICONS[currentFolder]} {currentFolder}
-            </Text>
+            Currently in: <Text style={{ fontWeight: 'bold' }}>{FOLDER_ICONS[currentFolder]} {currentFolder}</Text>
           </Text>
           {FOLDERS.map(folder => (
             <TouchableOpacity
@@ -423,10 +418,7 @@ export default function TranscriptScreen({ route }) {
               onPress={() => saveFolder(folder)}
               disabled={savingFolder}>
               <Text style={styles.folderOptionIcon}>{FOLDER_ICONS[folder]}</Text>
-              <Text style={[styles.folderOptionText,
-                currentFolder === folder && styles.folderOptionTextActive]}>
-                {folder}
-              </Text>
+              <Text style={[styles.folderOptionText, currentFolder === folder && styles.folderOptionTextActive]}>{folder}</Text>
               {currentFolder === folder && <Text style={styles.folderOptionCheck}>✓</Text>}
             </TouchableOpacity>
           ))}
@@ -435,10 +427,8 @@ export default function TranscriptScreen({ route }) {
     </Modal>
   );
 
-  // ─── Speaker Rename Modal ───
   const renderRenameModal = () => (
-    <Modal visible={renamingModal} transparent animationType="slide"
-      onRequestClose={() => setRenamingModal(false)}>
+    <Modal visible={renamingModal} transparent animationType="slide" onRequestClose={() => setRenamingModal(false)}>
       <View style={styles.modalOverlay}>
         <View style={styles.modalBox}>
           <View style={styles.modalHeader}>
@@ -449,8 +439,7 @@ export default function TranscriptScreen({ route }) {
           </View>
           <View style={styles.modalCurrentRow}>
             <Text style={styles.modalCurrentLabel}>Current name:</Text>
-            <View style={[styles.modalCurrentBadge,
-              { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(renamingSpeaker)] }]}>
+            <View style={[styles.modalCurrentBadge, { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(renamingSpeaker)] }]}>
               <Text style={styles.modalCurrentBadgeText}>{renamingSpeaker}</Text>
             </View>
           </View>
@@ -465,19 +454,13 @@ export default function TranscriptScreen({ route }) {
             returnKeyType="done"
             onSubmitEditing={saveSpeakerName}
           />
-          <Text style={styles.modalHint}>
-            💡 All "{renamingSpeaker}" labels in this recording will be renamed
-          </Text>
+          <Text style={styles.modalHint}>💡 All "{renamingSpeaker}" labels in this recording will be renamed</Text>
           <View style={styles.modalButtons}>
             <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setRenamingModal(false)}>
               <Text style={styles.modalCancelText}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.modalSaveBtn, savingName && { opacity: 0.6 }]}
-              onPress={saveSpeakerName} disabled={savingName}>
-              {savingName
-                ? <ActivityIndicator size="small" color="#FFF" />
-                : <Text style={styles.modalSaveText}>✅ Save Name</Text>}
+            <TouchableOpacity style={[styles.modalSaveBtn, savingName && { opacity: 0.6 }]} onPress={saveSpeakerName} disabled={savingName}>
+              {savingName ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={styles.modalSaveText}>✅ Save Name</Text>}
             </TouchableOpacity>
           </View>
         </View>
@@ -485,30 +468,19 @@ export default function TranscriptScreen({ route }) {
     </Modal>
   );
 
-  // ─── Chat Panel ───
   const renderChatPanel = () => (
-    <KeyboardAvoidingView
-      style={styles.chatOverlay}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}>
-
+    <KeyboardAvoidingView style={styles.chatOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
       <StatusBar barStyle="light-content" backgroundColor="#6C3FA0" />
-
       <View style={styles.chatHeader}>
-        <TouchableOpacity onPress={() => {
-          Keyboard.dismiss();
-          setShowChat(false);
-        }} style={styles.chatBackBtn}>
+        <TouchableOpacity onPress={() => { Keyboard.dismiss(); setShowChat(false); }} style={styles.chatBackBtn}>
           <Text style={styles.chatBackText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.chatHeaderTitle}>💬 Ask AI</Text>
         <View style={{ width: 60 }} />
       </View>
-
       <View style={styles.chatContext}>
         <Text style={styles.chatContextText} numberOfLines={1}>📝 {transcript.title}</Text>
       </View>
-
       {chatMessages.length === 0 && (
         <View style={styles.suggestionsContainer}>
           <Text style={styles.suggestionsTitle}>Try asking:</Text>
@@ -516,18 +488,13 @@ export default function TranscriptScreen({ route }) {
             {['What were the main topics?', 'What action items were mentioned?',
               'Who said what about the project?', 'What decisions were made?'
             ].map((q, i) => (
-              <TouchableOpacity key={i} style={styles.suggestionChip}
-                onPress={() => {
-                  setChatInput(q);
-                  setTimeout(() => inputRef.current?.focus(), 100);
-                }}>
+              <TouchableOpacity key={i} style={styles.suggestionChip} onPress={() => { setChatInput(q); setTimeout(() => inputRef.current?.focus(), 100); }}>
                 <Text style={styles.suggestionText}>{q}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </View>
       )}
-
       <FlatList
         ref={flatListRef}
         data={chatMessages}
@@ -536,14 +503,9 @@ export default function TranscriptScreen({ route }) {
         contentContainerStyle={styles.chatMessagesContent}
         keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => (
-          <View style={[styles.chatBubble,
-            item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
+          <View style={[styles.chatBubble, item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
             {item.role === 'ai' && <Text style={styles.aiLabel}>🤖 VoxNote AI</Text>}
-            {/* ✅ selectable so user can copy AI responses */}
-            <Text
-              selectable={true}
-              style={[styles.chatBubbleText,
-                item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
+            <Text selectable={true} style={[styles.chatBubbleText, item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
               {item.text}
             </Text>
           </View>
@@ -555,7 +517,6 @@ export default function TranscriptScreen({ route }) {
           </View>
         ) : null}
       />
-
       <View style={styles.chatInputWrapper}>
         <View style={styles.chatInputRow}>
           <TextInput
@@ -570,9 +531,7 @@ export default function TranscriptScreen({ route }) {
             returnKeyType="send"
             blurOnSubmit={false}
             onSubmitEditing={sendChatMessage}
-            onFocus={() => {
-              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 300);
-            }}
+            onFocus={() => { setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 300); }}
           />
           <TouchableOpacity
             style={[styles.sendBtn, (!chatInput.trim() || chatLoading) && styles.sendBtnDisabled]}
@@ -583,7 +542,6 @@ export default function TranscriptScreen({ route }) {
         </View>
         <View style={styles.navBarSpacer} />
       </View>
-
     </KeyboardAvoidingView>
   );
 
@@ -595,7 +553,6 @@ export default function TranscriptScreen({ route }) {
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
-        {/* ✅ Title selectable */}
         <Text selectable={true} style={styles.title}>{transcript.title}</Text>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{transcript.wordCount} words  •  {formatDate(transcript.createdAt)}</Text>
@@ -604,14 +561,12 @@ export default function TranscriptScreen({ route }) {
           </View>
         </View>
 
-        {/* Folder Badge */}
         <TouchableOpacity style={styles.folderBadge} onPress={() => setFolderModal(true)}>
           <Text style={styles.folderBadgeIcon}>{FOLDER_ICONS[currentFolder]}</Text>
           <Text style={styles.folderBadgeText}>{currentFolder}</Text>
           <Text style={styles.folderBadgeChange}>Change →</Text>
         </TouchableOpacity>
 
-        {/* Action Buttons */}
         <View style={styles.actions}>
           <TouchableOpacity style={styles.btn} onPress={copyToClipboard}>
             <Text style={styles.btnIcon}>📋</Text>
@@ -638,31 +593,21 @@ export default function TranscriptScreen({ route }) {
         </TouchableOpacity>
 
         {/* PDF Export Button */}
-        <TouchableOpacity
-          style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]}
-          onPress={exportAsPDF}
-          disabled={exportingPDF}>
-          {exportingPDF
-            ? <ActivityIndicator size="small" color="#FFFFFF" />
-            : <Text style={styles.pdfBtnIcon}>📄</Text>
-          }
-          <Text style={styles.pdfBtnText}>
-            {exportingPDF ? 'Generating PDF...' : 'Export as PDF'}
-          </Text>
+        <TouchableOpacity style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]} onPress={exportAsPDF} disabled={exportingPDF}>
+          {exportingPDF ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.pdfBtnIcon}>📄</Text>}
+          <Text style={styles.pdfBtnText}>{exportingPDF ? 'Generating PDF...' : 'Export as PDF'}</Text>
         </TouchableOpacity>
 
         {/* Share Link Button */}
-        <TouchableOpacity
-          style={[styles.shareLinkBtn, sharingLink && { opacity: 0.6 }]}
-          onPress={generateShareLink}
-          disabled={sharingLink}>
-          {sharingLink
-            ? <ActivityIndicator size="small" color="#FFFFFF" />
-            : <Text style={styles.shareLinkIcon}>🔗</Text>
-          }
-          <Text style={styles.shareLinkText}>
-            {sharingLink ? 'Generating link...' : 'Share via Link'}
-          </Text>
+        <TouchableOpacity style={[styles.shareLinkBtn, sharingLink && { opacity: 0.6 }]} onPress={generateShareLink} disabled={sharingLink}>
+          {sharingLink ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.shareLinkIcon}>🔗</Text>}
+          <Text style={styles.shareLinkText}>{sharingLink ? 'Generating link...' : 'Share via Link'}</Text>
+        </TouchableOpacity>
+
+        {/* ✅ Follow-up Email Button */}
+        <TouchableOpacity style={[styles.emailBtn, generatingEmail && { opacity: 0.6 }]} onPress={generateFollowUpEmail} disabled={generatingEmail}>
+          {generatingEmail ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.emailBtnIcon}>✉️</Text>}
+          <Text style={styles.emailBtnText}>{generatingEmail ? 'Generating email...' : 'Generate Follow-up Email'}</Text>
         </TouchableOpacity>
 
         {/* Export as Text Button */}
@@ -671,7 +616,6 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.exportBtnText}>Export Full Transcript (Text)</Text>
         </TouchableOpacity>
 
-        {/* Summary */}
         {loadingSummary && (
           <View style={styles.loadingBox}>
             <ActivityIndicator color="#1A56A0" />
@@ -681,12 +625,10 @@ export default function TranscriptScreen({ route }) {
         {summary && (
           <View style={styles.summaryBox}>
             <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
-            {/* ✅ Summary text selectable */}
             <Text selectable={true} style={styles.summaryText}>{summary}</Text>
           </View>
         )}
 
-        {/* Action Items */}
         {transcript.actionItems?.length > 0 && (
           <View style={styles.actionItemsBox}>
             <Text style={styles.actionItemsTitle}>✅ Action Items</Text>
@@ -696,7 +638,6 @@ export default function TranscriptScreen({ route }) {
                   <View style={styles.actionItemNumber}>
                     <Text style={styles.actionItemNumberText}>{index + 1}</Text>
                   </View>
-                  {/* ✅ Action item task selectable */}
                   <Text selectable={true} style={styles.actionItemTask}>{item.task}</Text>
                 </View>
                 <View style={styles.actionItemMeta}>
@@ -716,7 +657,6 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* Translation */}
         {hasTranslation && (
           <View style={styles.translationBox}>
             <View style={styles.translationHeader}>
@@ -725,7 +665,6 @@ export default function TranscriptScreen({ route }) {
                 <Text style={styles.toggleBtnText}>{showOriginal ? 'Hide Original' : 'Show Original'}</Text>
               </TouchableOpacity>
             </View>
-            {/* ✅ Translation selectable */}
             <Text selectable={true} style={styles.translationText}>{transcript.englishText}</Text>
             {showOriginal && transcript.originalText && (
               <View style={styles.originalBox}>
@@ -736,7 +675,6 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* Speaker Transcript */}
         {utterances.length > 0 ? (
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>🎙 Speaker Transcript</Text>
@@ -747,8 +685,7 @@ export default function TranscriptScreen({ route }) {
               {[...new Set(utterances.map(u => u.speaker))].map(speaker => (
                 <TouchableOpacity
                   key={speaker}
-                  style={[styles.legendBadge,
-                    { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(speaker)] }]}
+                  style={[styles.legendBadge, { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(speaker)] }]}
                   onPress={() => handleSpeakerTap(speaker)} activeOpacity={0.7}>
                   <Text style={styles.legendText}>{speaker}  ✏️</Text>
                 </TouchableOpacity>
@@ -764,18 +701,11 @@ export default function TranscriptScreen({ route }) {
                       onPress={() => handleSpeakerTap(utterance.speaker)} activeOpacity={0.7}>
                       <Text style={styles.speakerBadgeText}>{utterance.speaker}  ✏️</Text>
                     </TouchableOpacity>
-                    <Text style={styles.utteranceTime}>
-                      {formatTime(utterance.start)} — {formatTime(utterance.end)}
-                    </Text>
+                    <Text style={styles.utteranceTime}>{formatTime(utterance.start)} — {formatTime(utterance.end)}</Text>
                   </View>
-                  {/* ✅ Utterance text selectable */}
-                  <Text selectable={true} style={styles.utteranceText}>
-                    {utterance.englishText || utterance.text}
-                  </Text>
+                  <Text selectable={true} style={styles.utteranceText}>{utterance.englishText || utterance.text}</Text>
                   {utterance.englishText && utterance.englishText !== utterance.text && (
-                    <Text selectable={true} style={styles.utteranceOriginal}>
-                      {utterance.text}
-                    </Text>
+                    <Text selectable={true} style={styles.utteranceOriginal}>{utterance.text}</Text>
                   )}
                 </View>
               );
@@ -784,22 +714,16 @@ export default function TranscriptScreen({ route }) {
         ) : (
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>📝 Full Transcript</Text>
-            {/* ✅ Full transcript selectable */}
-            <Text selectable={true} style={styles.transcriptText}>
-              {transcript.englishText || transcript.text}
-            </Text>
+            <Text selectable={true} style={styles.transcriptText}>{transcript.englishText || transcript.text}</Text>
             {hasTranslation && (
               <>
-                <TouchableOpacity style={[styles.toggleBtn, { marginTop: 12 }]}
-                  onPress={() => setShowOriginal(!showOriginal)}>
+                <TouchableOpacity style={[styles.toggleBtn, { marginTop: 12 }]} onPress={() => setShowOriginal(!showOriginal)}>
                   <Text style={styles.toggleBtnText}>{showOriginal ? 'Hide Original' : 'Show Original'}</Text>
                 </TouchableOpacity>
                 {showOriginal && (
                   <View style={styles.originalBox}>
                     <Text style={styles.originalLabel}>Original:</Text>
-                    <Text selectable={true} style={styles.originalText}>
-                      {transcript.originalText || transcript.text}
-                    </Text>
+                    <Text selectable={true} style={styles.originalText}>{transcript.originalText || transcript.text}</Text>
                   </View>
                 )}
               </>
@@ -853,6 +777,12 @@ const styles = StyleSheet.create({
                    padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
   shareLinkIcon: { fontSize: 20 },
   shareLinkText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
+
+  // ✅ Email Button
+  emailBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2E7D32',
+                  padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  emailBtnIcon: { fontSize: 20 },
+  emailBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
   exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A',
                   padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },

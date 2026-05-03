@@ -13,7 +13,8 @@ export const useRecording = () => {
 export const RecordingProvider = ({ children }) => {
   const [isRecording,   setIsRecording]   = useState(false);
   const [isProcessing,  setIsProcessing]  = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
+  const [recordingTime,  setRecordingTime]  = useState(0);
+const startTimeRef = useRef(null);
   const [statusText,    setStatusText]    = useState('Tap to start recording');
   const [recordingUri,  setRecordingUri]  = useState(null);
 
@@ -75,9 +76,11 @@ export const RecordingProvider = ({ children }) => {
       setStatusText('Recording... speak now');
       setRecordingUri(null);
 
-      timerRef.current = setInterval(() => {
-        setRecordingTime(t => t + 1);
-      }, 1000);
+      startTimeRef.current = Date.now();
+timerRef.current = setInterval(() => {
+  const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+  setRecordingTime(elapsed);
+}, 1000);
 
       return true;
 
@@ -96,8 +99,14 @@ export const RecordingProvider = ({ children }) => {
 
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
-      setRecordingUri(uri);
+recordingRef.current = null;
+// ✅ Calculate final duration from start time
+const finalDuration = startTimeRef.current
+  ? Math.floor((Date.now() - startTimeRef.current) / 1000)
+  : recordingTime;
+setRecordingTime(finalDuration);
+setRecordingUri(uri);
+return uri;
 
       return uri;
 
