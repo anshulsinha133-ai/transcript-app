@@ -1,11 +1,10 @@
-import { Linking } from 'react-native';
 import React, { useState, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, SafeAreaView, Alert,
   ActivityIndicator, Share, TextInput,
   KeyboardAvoidingView, Platform, FlatList,
-  StatusBar, Modal, Keyboard
+  StatusBar, Modal, Keyboard, Linking
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as Print from 'expo-print';
@@ -51,6 +50,7 @@ export default function TranscriptScreen({ route }) {
   const [chatInput,      setChatInput]      = useState('');
   const [chatLoading,    setChatLoading]    = useState(false);
   const [exportingPDF,   setExportingPDF]   = useState(false);
+  const [sharingLink,    setSharingLink]    = useState(false);
 
   // Speaker naming
   const [utterances,      setUtterances]      = useState(transcript.utterances || []);
@@ -155,30 +155,35 @@ export default function TranscriptScreen({ route }) {
       Alert.alert('Error', err.message);
     }
   };
-const generateShareLink = async () => {
-  try {
-    Alert.alert('Generating link...', 'Please wait');
-    const response = await fetch(
-      'https://transcript-app-lbpe.onrender.com/share/generate',
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ transcriptId: transcript.id }),
+
+  // ─── Generate Share Link ───
+  const generateShareLink = async () => {
+    try {
+      setSharingLink(true);
+      const response = await fetch(
+        'https://transcript-app-lbpe.onrender.com/share/generate',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ transcriptId: transcript.id }),
+        }
+      );
+      const data = await response.json();
+      if (data.success) {
+        await Share.share({
+          message: `📝 ${transcript.title}\n\nView transcript: ${data.shareUrl}`,
+          title:   transcript.title,
+        });
+      } else {
+        Alert.alert('Error', 'Could not generate share link');
       }
-    );
-    const data = await response.json();
-    if (data.success) {
-      await Share.share({
-        message: `📝 ${transcript.title}\n\nView transcript: ${data.shareUrl}`,
-        title:   transcript.title,
-      });
-    } else {
-      Alert.alert('Error', 'Could not generate share link');
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setSharingLink(false);
     }
-  } catch (err) {
-    Alert.alert('Error', err.message);
-  }
-};
+  };
+
   // ─── PDF Export ───
   const exportAsPDF = async () => {
     try {
@@ -191,7 +196,6 @@ const generateShareLink = async () => {
       const words    = transcript.wordCount || 0;
       const lang     = getLangBadge();
 
-      // ─── Build action items HTML ───
       let actionItemsHTML = '';
       if (transcript.actionItems?.length > 0) {
         const rows = transcript.actionItems.map((item, i) => `
@@ -202,12 +206,9 @@ const generateShareLink = async () => {
             <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
           </tr>
         `).join('');
-
         actionItemsHTML = `
           <div class="section">
-            <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">
-              ✅ Action Items
-            </div>
+            <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">✅ Action Items</div>
             <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;overflow:hidden;">
               <thead>
                 <tr style="background:#FF9800;">
@@ -219,69 +220,48 @@ const generateShareLink = async () => {
               </thead>
               <tbody>${rows}</tbody>
             </table>
-          </div>
-        `;
+          </div>`;
       }
 
-      // ─── Build summary HTML ───
       const summaryContent = summary || transcript.autoSummary;
       let summaryHTML = '';
       if (summaryContent) {
         summaryHTML = `
           <div class="section">
-            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">
-              🤖 AI Summary
-            </div>
+            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
             <div style="background:#F0FAF4;padding:16px;border-radius:8px;
                         font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">
               ${summaryContent}
             </div>
-          </div>
-        `;
+          </div>`;
       }
 
-      // ─── Build transcript HTML ───
       let transcriptHTML = '';
       if (utterances.length > 0) {
-        const speakerColors = [
-          '#1A56A0','#1A7A4A','#C85A00','#8B1AAF',
-          '#C0392B','#0097A7','#795548','#E91E63'
-        ];
-        const speakerBG = [
-          '#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE',
-          '#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'
-        ];
+        const speakerColors = ['#1A56A0','#1A7A4A','#C85A00','#8B1AAF','#C0392B','#0097A7','#795548','#E91E63'];
+        const speakerBG     = ['#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE','#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'];
         const utterancesHTML = utterances.map((u) => {
           const idx   = getSpeakerIndex(u.speaker);
-          const color = speakerColors[idx];
-          const bg    = speakerBG[idx];
           const start = formatTime(u.start);
           const end   = formatTime(u.end);
           return `
-            <div style="background:${bg};border-radius:10px;padding:14px;margin-bottom:12px;">
+            <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                <span style="background:${color};color:#fff;padding:4px 12px;
-                             border-radius:12px;font-size:12px;font-weight:700;">
-                  ${u.speaker}
-                </span>
+                <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;
+                             border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
                 <span style="font-size:11px;color:#888;">${start} — ${end}</span>
               </div>
-              <div style="font-size:14px;color:#333;line-height:1.7;">
-                ${u.englishText || u.text}
-              </div>
+              <div style="font-size:14px;color:#333;line-height:1.7;">${u.englishText || u.text}</div>
               ${u.englishText && u.englishText !== u.text
                 ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>`
                 : ''}
-            </div>
-          `;
+            </div>`;
         }).join('');
-
         transcriptHTML = `
           <div class="section">
             <div class="section-title">🎙 Speaker Transcript</div>
             ${utterancesHTML}
-          </div>
-        `;
+          </div>`;
       } else {
         transcriptHTML = `
           <div class="section">
@@ -289,11 +269,9 @@ const generateShareLink = async () => {
             <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">
               ${transcript.englishText || transcript.text}
             </div>
-          </div>
-        `;
+          </div>`;
       }
 
-      // ─── Full HTML ───
       const html = `
         <!DOCTYPE html>
         <html>
@@ -301,73 +279,27 @@ const generateShareLink = async () => {
           <meta charset="utf-8"/>
           <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
           <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-              background: #fff;
-              color: #333;
-            }
-            .header {
-              background: linear-gradient(135deg, #0D3B7A, #1A56A0);
-              color: white;
-              padding: 32px 40px;
-            }
-            .logo {
-              font-size: 13px;
-              font-weight: 700;
-              letter-spacing: 2px;
-              color: #AACFEE;
-              margin-bottom: 12px;
-              text-transform: uppercase;
-            }
-            .title {
-              font-size: 24px;
-              font-weight: 800;
-              margin-bottom: 16px;
-              line-height: 1.3;
-            }
-            .meta-grid {
-              display: flex;
-              gap: 24px;
-              flex-wrap: wrap;
-            }
-            .meta-item {
-              background: rgba(255,255,255,0.15);
-              padding: 8px 14px;
-              border-radius: 8px;
-              font-size: 12px;
-            }
-            .meta-label {
-              color: #AACFEE;
-              font-size: 10px;
-              text-transform: uppercase;
-              letter-spacing: 1px;
-              margin-bottom: 2px;
-            }
-            .meta-value {
-              color: #fff;
-              font-weight: 600;
-            }
-            .body { padding: 32px 40px; }
-            .section {
-              margin-bottom: 32px;
-            }
-            .section-title {
-              font-size: 16px;
-              font-weight: 700;
-              color: #0D3B7A;
-              margin-bottom: 16px;
-              padding-left: 12px;
-              border-left: 4px solid #1A56A0;
-            }
-            .footer {
-              margin-top: 40px;
-              padding: 20px 40px;
-              border-top: 1px solid #EEE;
-              text-align: center;
-              font-size: 11px;
-              color: #AAA;
-            }
+            * { margin:0; padding:0; box-sizing:border-box; }
+            body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+                   background:#fff; color:#333; }
+            .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0);
+                      color:white; padding:32px 40px; }
+            .logo { font-size:13px; font-weight:700; letter-spacing:2px;
+                    color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
+            .title { font-size:24px; font-weight:800; margin-bottom:16px; line-height:1.3; }
+            .meta-grid { display:flex; gap:24px; flex-wrap:wrap; }
+            .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px;
+                         border-radius:8px; font-size:12px; }
+            .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase;
+                          letter-spacing:1px; margin-bottom:2px; }
+            .meta-value { color:#fff; font-weight:600; }
+            .body { padding:32px 40px; }
+            .section { margin-bottom:32px; }
+            .section-title { font-size:16px; font-weight:700; color:#0D3B7A;
+                             margin-bottom:16px; padding-left:12px;
+                             border-left:4px solid #1A56A0; }
+            .footer { margin-top:40px; padding:20px 40px; border-top:1px solid #EEE;
+                      text-align:center; font-size:11px; color:#AAA; }
           </style>
         </head>
         <body>
@@ -375,55 +307,35 @@ const generateShareLink = async () => {
             <div class="logo">VoxNote — AI Transcription</div>
             <div class="title">${transcript.title}</div>
             <div class="meta-grid">
-              <div class="meta-item">
-                <div class="meta-label">Date</div>
-                <div class="meta-value">${date}</div>
-              </div>
-              <div class="meta-item">
-                <div class="meta-label">Duration</div>
-                <div class="meta-value">${duration}</div>
-              </div>
-              <div class="meta-item">
-                <div class="meta-label">Words</div>
-                <div class="meta-value">${words}</div>
-              </div>
-              <div class="meta-item">
-                <div class="meta-label">Language</div>
-                <div class="meta-value">${lang}</div>
-              </div>
-              <div class="meta-item">
-                <div class="meta-label">Folder</div>
-                <div class="meta-value">${currentFolder}</div>
-              </div>
+              <div class="meta-item"><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
+              <div class="meta-item"><div class="meta-label">Duration</div><div class="meta-value">${duration}</div></div>
+              <div class="meta-item"><div class="meta-label">Words</div><div class="meta-value">${words}</div></div>
+              <div class="meta-item"><div class="meta-label">Language</div><div class="meta-value">${lang}</div></div>
+              <div class="meta-item"><div class="meta-label">Folder</div><div class="meta-value">${currentFolder}</div></div>
             </div>
           </div>
-
           <div class="body">
             ${summaryHTML}
             ${actionItemsHTML}
             ${transcriptHTML}
           </div>
-
           <div class="footer">
             Generated by VoxNote AI Transcription App • ${new Date().toLocaleDateString('en-IN')}
           </div>
         </body>
-        </html>
-      `;
+        </html>`;
 
       const { uri } = await Print.printToFileAsync({ html, base64: false });
-
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
         await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
+          mimeType:    'application/pdf',
           dialogTitle: 'Share or Save PDF',
-          UTI: 'com.adobe.pdf',
+          UTI:         'com.adobe.pdf',
         });
       } else {
         Alert.alert('PDF Created', 'Saved to: ' + uri);
       }
-
     } catch (err) {
       console.error('PDF export error:', err);
       Alert.alert('Error', 'Could not generate PDF: ' + err.message);
@@ -627,8 +539,11 @@ const generateShareLink = async () => {
           <View style={[styles.chatBubble,
             item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
             {item.role === 'ai' && <Text style={styles.aiLabel}>🤖 VoxNote AI</Text>}
-            <Text style={[styles.chatBubbleText,
-              item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
+            {/* ✅ selectable so user can copy AI responses */}
+            <Text
+              selectable={true}
+              style={[styles.chatBubbleText,
+                item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
               {item.text}
             </Text>
           </View>
@@ -680,7 +595,8 @@ const generateShareLink = async () => {
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
-        <Text style={styles.title}>{transcript.title}</Text>
+        {/* ✅ Title selectable */}
+        <Text selectable={true} style={styles.title}>{transcript.title}</Text>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{transcript.wordCount} words  •  {formatDate(transcript.createdAt)}</Text>
           <View style={styles.langBadge}>
@@ -721,18 +637,31 @@ const generateShareLink = async () => {
           <Text style={styles.chatBtnArrow}>›</Text>
         </TouchableOpacity>
 
-        {/* ✅ PDF Export Button */}
+        {/* PDF Export Button */}
         <TouchableOpacity
           style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]}
           onPress={exportAsPDF}
           disabled={exportingPDF}>
-          {exportingPDF ? (
-            <ActivityIndicator size="small" color="#FFFFFF" />
-          ) : (
-            <Text style={styles.pdfBtnIcon}>📄</Text>
-          )}
+          {exportingPDF
+            ? <ActivityIndicator size="small" color="#FFFFFF" />
+            : <Text style={styles.pdfBtnIcon}>📄</Text>
+          }
           <Text style={styles.pdfBtnText}>
             {exportingPDF ? 'Generating PDF...' : 'Export as PDF'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Share Link Button */}
+        <TouchableOpacity
+          style={[styles.shareLinkBtn, sharingLink && { opacity: 0.6 }]}
+          onPress={generateShareLink}
+          disabled={sharingLink}>
+          {sharingLink
+            ? <ActivityIndicator size="small" color="#FFFFFF" />
+            : <Text style={styles.shareLinkIcon}>🔗</Text>
+          }
+          <Text style={styles.shareLinkText}>
+            {sharingLink ? 'Generating link...' : 'Share via Link'}
           </Text>
         </TouchableOpacity>
 
@@ -752,7 +681,8 @@ const generateShareLink = async () => {
         {summary && (
           <View style={styles.summaryBox}>
             <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
-            <Text style={styles.summaryText}>{summary}</Text>
+            {/* ✅ Summary text selectable */}
+            <Text selectable={true} style={styles.summaryText}>{summary}</Text>
           </View>
         )}
 
@@ -766,7 +696,8 @@ const generateShareLink = async () => {
                   <View style={styles.actionItemNumber}>
                     <Text style={styles.actionItemNumberText}>{index + 1}</Text>
                   </View>
-                  <Text style={styles.actionItemTask}>{item.task}</Text>
+                  {/* ✅ Action item task selectable */}
+                  <Text selectable={true} style={styles.actionItemTask}>{item.task}</Text>
                 </View>
                 <View style={styles.actionItemMeta}>
                   {item.owner && (
@@ -794,11 +725,12 @@ const generateShareLink = async () => {
                 <Text style={styles.toggleBtnText}>{showOriginal ? 'Hide Original' : 'Show Original'}</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.translationText}>{transcript.englishText}</Text>
+            {/* ✅ Translation selectable */}
+            <Text selectable={true} style={styles.translationText}>{transcript.englishText}</Text>
             {showOriginal && transcript.originalText && (
               <View style={styles.originalBox}>
                 <Text style={styles.originalLabel}>Original (Roman script):</Text>
-                <Text style={styles.originalText}>{transcript.originalText}</Text>
+                <Text selectable={true} style={styles.originalText}>{transcript.originalText}</Text>
               </View>
             )}
           </View>
@@ -809,7 +741,7 @@ const generateShareLink = async () => {
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>🎙 Speaker Transcript</Text>
             <View style={styles.renameHintBox}>
-              <Text style={styles.renameHintText}>✏️ Tap any speaker name to rename</Text>
+              <Text style={styles.renameHintText}>✏️ Tap speaker name to rename · Long press text to copy</Text>
             </View>
             <View style={styles.legendRow}>
               {[...new Set(utterances.map(u => u.speaker))].map(speaker => (
@@ -836,9 +768,14 @@ const generateShareLink = async () => {
                       {formatTime(utterance.start)} — {formatTime(utterance.end)}
                     </Text>
                   </View>
-                  <Text style={styles.utteranceText}>{utterance.englishText || utterance.text}</Text>
+                  {/* ✅ Utterance text selectable */}
+                  <Text selectable={true} style={styles.utteranceText}>
+                    {utterance.englishText || utterance.text}
+                  </Text>
                   {utterance.englishText && utterance.englishText !== utterance.text && (
-                    <Text style={styles.utteranceOriginal}>{utterance.text}</Text>
+                    <Text selectable={true} style={styles.utteranceOriginal}>
+                      {utterance.text}
+                    </Text>
                   )}
                 </View>
               );
@@ -847,7 +784,10 @@ const generateShareLink = async () => {
         ) : (
           <View style={styles.transcriptBox}>
             <Text style={styles.transcriptLabel}>📝 Full Transcript</Text>
-            <Text style={styles.transcriptText}>{transcript.englishText || transcript.text}</Text>
+            {/* ✅ Full transcript selectable */}
+            <Text selectable={true} style={styles.transcriptText}>
+              {transcript.englishText || transcript.text}
+            </Text>
             {hasTranslation && (
               <>
                 <TouchableOpacity style={[styles.toggleBtn, { marginTop: 12 }]}
@@ -857,7 +797,9 @@ const generateShareLink = async () => {
                 {showOriginal && (
                   <View style={styles.originalBox}>
                     <Text style={styles.originalLabel}>Original:</Text>
-                    <Text style={styles.originalText}>{transcript.originalText || transcript.text}</Text>
+                    <Text selectable={true} style={styles.originalText}>
+                      {transcript.originalText || transcript.text}
+                    </Text>
                   </View>
                 )}
               </>
@@ -902,11 +844,15 @@ const styles = StyleSheet.create({
   chatBtnSubtitle:   { color: '#DDD0FF', fontSize: 11, marginTop: 2 },
   chatBtnArrow:      { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
 
-  // ✅ PDF Button
-  pdfBtn:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#C0392B',
-                  padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
-  pdfBtnIcon:   { fontSize: 20 },
-  pdfBtnText:   { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
+  pdfBtn:        { flexDirection: 'row', alignItems: 'center', backgroundColor: '#C0392B',
+                   padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  pdfBtnIcon:    { fontSize: 20 },
+  pdfBtnText:    { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
+
+  shareLinkBtn:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0097A7',
+                   padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  shareLinkIcon: { fontSize: 20 },
+  shareLinkText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
   exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A',
                   padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
@@ -963,7 +909,6 @@ const styles = StyleSheet.create({
   utteranceText:    { fontSize: 15, color: '#333', lineHeight: 26 },
   utteranceOriginal:{ fontSize: 12, color: '#888', lineHeight: 20, marginTop: 6, fontStyle: 'italic' },
 
-  // ─── Modals ───
   modalOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBox:         { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20,
                       borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
@@ -996,7 +941,6 @@ const styles = StyleSheet.create({
                       backgroundColor: '#1A56A0', alignItems: 'center' },
   modalSaveText:    { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
 
-  // ─── Chat ───
   chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                       backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
   chatHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
