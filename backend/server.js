@@ -151,7 +151,6 @@ app.post('/generate-email', async (req, res) => {
   if (!transcript) return res.status(400).json({ success: false, error: 'No transcript provided' });
 
   try {
-    // Build action items text
     let actionItemsText = '';
     if (actionItems && actionItems.length > 0) {
       actionItemsText = actionItems.map((item, i) => {
@@ -198,18 +197,11 @@ Write the complete follow-up email now.`
     });
 
     const emailContent = completion.choices[0].message.content.trim();
+    const lines        = emailContent.split('\n');
+    const subjectLine  = lines[0].replace(/^Subject:\s*/i, '').trim();
+    const body         = lines.slice(2).join('\n').trim();
 
-    // Extract subject and body
-    const lines     = emailContent.split('\n');
-    const subjectLine = lines[0].replace(/^Subject:\s*/i, '').trim();
-    const body      = lines.slice(2).join('\n').trim();
-
-    res.json({
-      success: true,
-      subject: subjectLine,
-      body:    body,
-      full:    emailContent,
-    });
+    res.json({ success: true, subject: subjectLine, body, full: emailContent });
 
   } catch (err) {
     console.error('/generate-email error:', err.message);
@@ -320,7 +312,7 @@ app.get('/share/:token', async (req, res) => {
       };
       const utterancesHTML = data.utterances.map(u => {
         const idx   = getSpeakerIdx(u.speaker);
-        const start = u.start ? `${Math.floor(u.start/60000).toString().padStart(2,'0')}:${Math.floor((u.start%60000)/1000).toString().padStart(2,'0')}` : '';
+        const start = u.start ? `${Math.floor(u.start/60000).toString().padStart(2,'0')}:${Math.floor((u.start%60000)/1000).toString().padStart(2,'00')}` : '';
         const end   = u.end   ? `${Math.floor(u.end/60000).toString().padStart(2,'0')}:${Math.floor((u.end%60000)/1000).toString().padStart(2,'0')}` : '';
         return `
           <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
@@ -505,6 +497,57 @@ Rules:
   }
 };
 
+// ─── Helper: Auto detect speaker names from introductions ───
+const detectSpeakerNames = async (utterances) => {
+  try {
+    if (!utterances || utterances.length === 0) return {};
+
+    // Use first 30 utterances for name detection
+    const dialogue = utterances.slice(0, 30).map(u =>
+      `${u.speaker}: ${u.englishText || u.text}`
+    ).join('\n');
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are an expert at detecting when people introduce themselves in conversations.
+Analyze the transcript and find speaker introductions in English, Hindi or Marathi.
+Look for patterns like:
+- "I am [name]", "I'm [name]", "My name is [name]"
+- "Main [name] hoon", "Mera naam [name] hai"
+- "This is [name]", "Hello I'm [name]", "Hi [name] here"
+- "[name] speaking", "It's [name]"
+- Someone else addressing them: "Hello [name]", "Thank you [name]"
+
+Rules:
+1. Only return names you are VERY confident about
+2. Names should be real person names — not generic words
+3. Return ONLY a JSON object mapping speaker labels to real names
+4. Example: {"Speaker A": "Anshul", "Speaker B": "Priya"}
+5. If no introductions found, return: {}
+6. Return ONLY the JSON, nothing else`
+        },
+        {
+          role: 'user',
+          content: `Detect speaker names from this transcript:\n\n${dialogue}`
+        }
+      ],
+      max_tokens: 200,
+    });
+
+    const raw    = completion.choices[0].message.content.trim();
+    const parsed = JSON.parse(raw);
+    console.log('Detected speaker names:', parsed);
+    return typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+
+  } catch (err) {
+    console.error('Speaker name detection error:', err.message);
+    return {};
+  }
+};
+
 // ─── Helper: Process completed transcript ───
 const processTranscript = async (transcript) => {
   const rawText      = transcript.text || '';
@@ -555,19 +598,34 @@ const processTranscript = async (transcript) => {
   const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
   console.log('Smart title result:', smartTitle);
 
+  // ─── ✅ Auto detect speaker names ───
+  console.log('Detecting speaker names...');
+  const speakerNameMap = await detectSpeakerNames(englishUtterances || utterances);
+
+  // ─── ✅ Apply detected names to utterances ───
+  let finalUtterances = englishUtterances || utterances;
+  if (Object.keys(speakerNameMap).length > 0) {
+    finalUtterances = finalUtterances.map(u => ({
+      ...u,
+      speaker: speakerNameMap[u.speaker] || u.speaker,
+    }));
+    console.log('Speaker names applied:', speakerNameMap);
+  }
+
   return {
     success:      true,
     status:       'completed',
     text:         rawText,
-    smartTitle:   smartTitle  || null,
-    englishText:  englishText || null,
-    utterances:   englishUtterances || utterances,
-    words:        transcript.words  || [],
+    smartTitle:   smartTitle     || null,
+    englishText:  englishText    || null,
+    utterances:   finalUtterances,
+    words:        transcript.words || [],
     duration:     transcript.audio_duration || null,
     detectedLang: detectedLang,
-    autoSummary:  autoSummary  || null,
-    actionItems:  actionItems  || [],
+    autoSummary:  autoSummary    || null,
+    actionItems:  actionItems    || [],
     speakers:     speakerList.length,
+    speakerNames: speakerNameMap, // ✅ Send detected names to frontend
   };
 };
 
