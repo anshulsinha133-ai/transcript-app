@@ -1,17 +1,56 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, Alert, ActivityIndicator
+  SafeAreaView, Alert, ActivityIndicator, Modal
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { transcribeWithSpeakers } from '../services/api';
 import { saveTranscript, createTranscriptObj } from '../utils/storage';
 
+// ─── Recording Templates ───────────────────────────────────────────── ✅ NEW
+const TEMPLATES = [
+  {
+    id:       'meeting',
+    icon:     '👥',
+    label:    'Meeting',
+    color:    '#1A56A0',
+    bg:       '#E8F0FC',
+    hint:     'Decisions, action items, owners',
+  },
+  {
+    id:       'sales',
+    icon:     '💰',
+    label:    'Sales Call',
+    color:    '#C85A00',
+    bg:       '#FEF3E8',
+    hint:     'Pain points, next steps, deal stage',
+  },
+  {
+    id:       'lecture',
+    icon:     '🎓',
+    label:    'Lecture',
+    color:    '#1A7A4A',
+    bg:       '#E8F5EE',
+    hint:     'Key concepts, topics to review',
+  },
+  {
+    id:       'interview',
+    icon:     '🧑‍💼',
+    label:    'Interview',
+    color:    '#8B1AAF',
+    bg:       '#F3E8FE',
+    hint:     'Strengths, responses, red flags',
+  },
+];
+// ──────────────────────────────────────────────────────────────────────
+
 export default function RecordScreen({ navigation }) {
-  const [isRecording,   setIsRecording]   = useState(false);
-  const [statusText,    setStatusText]    = useState('Tap to start recording');
-  const [recordingTime, setRecordingTime] = useState(0);
-  const [isProcessing,  setIsProcessing]  = useState(false);
+  const [isRecording,     setIsRecording]     = useState(false);
+  const [statusText,      setStatusText]      = useState('Choose a template to begin');
+  const [recordingTime,   setRecordingTime]   = useState(0);
+  const [isProcessing,    setIsProcessing]    = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState(null); // ✅ NEW
+  const [showTemplates,   setShowTemplates]   = useState(false);  // ✅ NEW
 
   const recordingRef   = useRef(null);
   const timerRef       = useRef(null);
@@ -32,7 +71,23 @@ export default function RecordScreen({ navigation }) {
     return `${m}:${s}`;
   };
 
-  const startRecording = async () => {
+  // ─── Open template picker, then start recording ─────────── ✅ NEW
+  const handleRecordPress = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      setShowTemplates(true);
+    }
+  };
+
+  const selectTemplateAndRecord = async (template) => {
+    setSelectedTemplate(template);
+    setShowTemplates(false);
+    await startRecording(template);
+  };
+  // ────────────────────────────────────────────────────────────
+
+  const startRecording = async (template) => {
     try {
       const { granted } = await Audio.requestPermissionsAsync();
       if (!granted) {
@@ -109,11 +164,9 @@ export default function RecordScreen({ navigation }) {
             result.utterances?.map(u => u.englishText || u.text).join(' ') ||
             'Recording saved';
 
-          // ✅ SMART TITLE — use AI title or fallback to date
           const title = result.smartTitle ||
             'Recording ' + new Date().toLocaleDateString('en-IN');
 
-          // ✅ Build transcript object — id starts as null
           const obj = {
             ...createTranscriptObj(title, text, recordingTime),
             utterances:   result.utterances   || [],
@@ -124,12 +177,12 @@ export default function RecordScreen({ navigation }) {
             autoSummary:  result.autoSummary  || null,
             actionItems:  result.actionItems  || [],
             detectedLang: result.detectedLang || 'en',
-            mode:         result.detectedLang !== 'en' ? 'auto' : 'en',
+            mode:         selectedTemplate?.id || (result.detectedLang !== 'en' ? 'auto' : 'en'), // ✅ NEW
+            templateLabel: selectedTemplate?.label || null, // ✅ NEW
           };
 
           setStatusText('Saving transcript...');
 
-          // ✅ saveTranscript returns real Supabase UUID
           const saved = await saveTranscript(obj);
 
           if (saved && saved.success) {
@@ -142,28 +195,68 @@ export default function RecordScreen({ navigation }) {
           }
 
         } else if (result.canResume) {
-  // ✅ Network dropped but job is safe — show resume option
-  setStatusText('Network lost — recording safe ✅');
-  Alert.alert(
-    '📡 Network Lost',
-    'Your recording was uploaded and is being processed.\n\nGo back to Home — you will see a "Resume" button to fetch your transcript when connection is restored.',
-    [{ text: 'Go to Home', onPress: () => navigation.navigate('Home') }]
-  );
-} else {
-  setStatusText('Error: ' + (result.error || 'Unknown error'));
-}
+          setStatusText('Network lost — recording safe ✅');
+          Alert.alert(
+            '📡 Network Lost',
+            'Your recording was uploaded and is being processed.\n\nGo back to Home — you will see a "Resume" button to fetch your transcript when connection is restored.',
+            [{ text: 'Go to Home', onPress: () => navigation.navigate('Home') }]
+          );
+        } else {
+          setStatusText('Error: ' + (result.error || 'Unknown error'));
+        }
       }
 
     } catch (err) {
       Alert.alert('Error', 'Could not stop recording: ' + err.message);
-      setStatusText('Tap to start recording');
+      setStatusText('Choose a template to begin');
     } finally {
       setIsProcessing(false);
     }
   };
 
+  // ─── Template Picker Modal ─────────────────────────────────── ✅ NEW
+  const renderTemplateModal = () => (
+    <Modal
+      visible={showTemplates}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowTemplates(false)}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBox}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>🎙 Choose Recording Type</Text>
+            <TouchableOpacity onPress={() => setShowTemplates(false)}>
+              <Text style={styles.modalCloseX}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modalSubtitle}>
+            This helps AI generate a smarter summary for you
+          </Text>
+          {TEMPLATES.map(t => (
+            <TouchableOpacity
+              key={t.id}
+              style={[styles.templateOption, { backgroundColor: t.bg, borderColor: t.color }]}
+              onPress={() => selectTemplateAndRecord(t)}
+              activeOpacity={0.75}>
+              <Text style={styles.templateIcon}>{t.icon}</Text>
+              <View style={styles.templateTextWrap}>
+                <Text style={[styles.templateLabel, { color: t.color }]}>{t.label}</Text>
+                <Text style={styles.templateHint}>{t.hint}</Text>
+              </View>
+              <Text style={[styles.templateArrow, { color: t.color }]}>›</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+    </Modal>
+  );
+  // ──────────────────────────────────────────────────────────────
+
+  const activeTemplate = TEMPLATES.find(t => t.id === selectedTemplate?.id);
+
   return (
     <SafeAreaView style={styles.container}>
+      {renderTemplateModal()}
 
       {/* Timer */}
       <Text style={styles.timer}>{formatTime(recordingTime)}</Text>
@@ -174,11 +267,25 @@ export default function RecordScreen({ navigation }) {
         <Text style={styles.statusText}>{statusText}</Text>
       </View>
 
+      {/* ✅ Template badge — shown once a template is selected */}
+      {selectedTemplate && !isProcessing && (
+        <TouchableOpacity
+          style={[styles.templateBadge, { backgroundColor: activeTemplate?.bg, borderColor: activeTemplate?.color }]}
+          onPress={() => !isRecording && setShowTemplates(true)}
+          disabled={isRecording}>
+          <Text style={styles.templateBadgeIcon}>{activeTemplate?.icon}</Text>
+          <Text style={[styles.templateBadgeLabel, { color: activeTemplate?.color }]}>
+            {activeTemplate?.label}
+          </Text>
+          {!isRecording && <Text style={[styles.templateBadgeChange, { color: activeTemplate?.color }]}>Change →</Text>}
+        </TouchableOpacity>
+      )}
+
       {/* Info Box */}
       <View style={styles.infoBox}>
         {isRecording ? (
           <>
-            <Text style={styles.infoIcon}>🎙</Text>
+            <Text style={styles.infoIcon}>{activeTemplate?.icon || '🎙'}</Text>
             <Text style={styles.infoText}>Recording in progress...</Text>
             <Text style={styles.infoSubText}>
               Speak in English, Hindi or Marathi{'\n'}
@@ -211,7 +318,7 @@ export default function RecordScreen({ navigation }) {
       {/* Record Button */}
       <TouchableOpacity
         style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
-        onPress={isRecording ? stopRecording : startRecording}
+        onPress={handleRecordPress}
         disabled={isProcessing}>
         <Text style={styles.recordBtnText}>
           {isRecording ? '⏹ Stop Recording' : '🎙 Start Recording'}
@@ -227,8 +334,17 @@ const styles = StyleSheet.create({
   timer:           { fontSize: 64, fontWeight: 'bold', color: '#0D3B7A',
                      textAlign: 'center', marginTop: 20, marginBottom: 10 },
   statusRow:       { flexDirection: 'row', alignItems: 'center',
-                     justifyContent: 'center', gap: 8, marginBottom: 16 },
+                     justifyContent: 'center', gap: 8, marginBottom: 10 },
   statusText:      { fontSize: 14, color: '#666', textAlign: 'center' },
+
+  // ✅ Template badge
+  templateBadge:      { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
+                        borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+                        marginBottom: 12, gap: 6 },
+  templateBadgeIcon:  { fontSize: 16 },
+  templateBadgeLabel: { fontSize: 13, fontWeight: '700', flex: 1 },
+  templateBadgeChange:{ fontSize: 12 },
+
   infoBox:         { flex: 1, justifyContent: 'center', alignItems: 'center',
                      marginBottom: 20, backgroundColor: '#FFFFFF',
                      borderRadius: 16, padding: 24,
@@ -241,4 +357,21 @@ const styles = StyleSheet.create({
                      borderRadius: 16, alignItems: 'center' },
   recordBtnActive: { backgroundColor: '#C0392B' },
   recordBtnText:   { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+
+  // ✅ Template modal
+  modalOverlay:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalBox:        { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24,
+                     borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
+  modalHeader:     { flexDirection: 'row', justifyContent: 'space-between',
+                     alignItems: 'center', marginBottom: 6 },
+  modalTitle:      { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
+  modalCloseX:     { fontSize: 22, color: '#888', padding: 4 },
+  modalSubtitle:   { fontSize: 13, color: '#888', marginBottom: 20 },
+  templateOption:  { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
+                     borderRadius: 14, padding: 14, marginBottom: 10, gap: 12 },
+  templateIcon:    { fontSize: 26 },
+  templateTextWrap:{ flex: 1 },
+  templateLabel:   { fontSize: 15, fontWeight: '700', marginBottom: 2 },
+  templateHint:    { fontSize: 12, color: '#888' },
+  templateArrow:   { fontSize: 24, fontWeight: 'bold' },
 });

@@ -21,6 +21,15 @@ const FOLDER_ICONS = {
   Lectures: '🎓',
 };
 
+// ─── Template config (for badge display) ─────────────────────── ✅ NEW
+const TEMPLATE_MAP = {
+  meeting:   { icon: '👥', label: 'Meeting',    color: '#1A56A0', bg: '#E8F0FC' },
+  sales:     { icon: '💰', label: 'Sales Call', color: '#C85A00', bg: '#FEF3E8' },
+  lecture:   { icon: '🎓', label: 'Lecture',    color: '#1A7A4A', bg: '#E8F5EE' },
+  interview: { icon: '🧑‍💼', label: 'Interview', color: '#8B1AAF', bg: '#F3E8FE' },
+};
+// ──────────────────────────────────────────────────────────────────
+
 const SPEAKER_COLORS = [
   '#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF',
   '#C0392B', '#0097A7', '#795548', '#E91E63'
@@ -49,7 +58,8 @@ export default function TranscriptScreen({ route }) {
   const [chatLoading,      setChatLoading]      = useState(false);
   const [exportingPDF,     setExportingPDF]     = useState(false);
   const [sharingLink,      setSharingLink]      = useState(false);
-  const [generatingEmail,  setGeneratingEmail]  = useState(false); // ✅ NEW
+  const [generatingEmail,  setGeneratingEmail]  = useState(false);
+  const [sharingWhatsApp,  setSharingWhatsApp]  = useState(false);
 
   const [utterances,      setUtterances]      = useState(transcript.utterances || []);
   const [renamingModal,   setRenamingModal]   = useState(false);
@@ -66,6 +76,9 @@ export default function TranscriptScreen({ route }) {
 
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
+
+  // ✅ Resolve template from mode field
+  const templateInfo = TEMPLATE_MAP[transcript.mode] || null;
 
   const handleSpeakerTap = (speaker) => {
     setRenamingSpeaker(speaker);
@@ -219,6 +232,50 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
+  // ─── Share to WhatsApp ───
+  const shareToWhatsApp = async () => {
+    try {
+      setSharingWhatsApp(true);
+
+      const activeSummary = summary || transcript.autoSummary;
+      let message = `📝 *${transcript.title}*\n`;
+      message += `🗓️ ${formatDate(transcript.createdAt)}\n`;
+
+      if (activeSummary) {
+        message += `\n🤖 *Summary:*\n${activeSummary}\n`;
+      }
+
+      if (transcript.actionItems?.length > 0) {
+        message += `\n✅ *Action Items:*\n`;
+        transcript.actionItems.forEach((item, i) => {
+          message += `${i + 1}. ${item.task}`;
+          if (item.owner)    message += ` — ${item.owner}`;
+          if (item.deadline) message += ` (${item.deadline})`;
+          message += '\n';
+        });
+      }
+
+      if (transcript.shareToken) {
+        message += `\n🔗 https://transcript-app-lbpe.onrender.com/share/${transcript.shareToken}\n`;
+      }
+
+      message += `\n_Shared via VoxNote AI_`;
+
+      const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(message)}`;
+      const canOpen = await Linking.canOpenURL(whatsappUrl);
+
+      if (canOpen) {
+        await Linking.openURL(whatsappUrl);
+      } else {
+        await Share.share({ message, title: transcript.title });
+      }
+    } catch (err) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setSharingWhatsApp(false);
+    }
+  };
+
   // ─── PDF Export ───
   const exportAsPDF = async () => {
     try {
@@ -344,11 +401,15 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
+  // ─── Summary — pass mode so server uses right prompt ──────── ✅ UPDATED
   const getSummary = async () => {
     setLoadingSummary(true);
     setSummary(null);
     try {
-      const result = await summarizeTranscript(transcript.englishText || transcript.text);
+      const result = await summarizeTranscript(
+        transcript.englishText || transcript.text,
+        transcript.mode // ✅ pass template mode
+      );
       if (result.success) setSummary(result.summary);
       else Alert.alert('Error', 'Could not generate summary.');
     } catch (err) { Alert.alert('Error', err.message); }
@@ -561,6 +622,14 @@ export default function TranscriptScreen({ route }) {
           </View>
         </View>
 
+        {/* ✅ NEW — Template badge (only shown if template was set) */}
+        {templateInfo && (
+          <View style={[styles.templateBadge, { backgroundColor: templateInfo.bg, borderColor: templateInfo.color }]}>
+            <Text style={styles.templateBadgeIcon}>{templateInfo.icon}</Text>
+            <Text style={[styles.templateBadgeLabel, { color: templateInfo.color }]}>{templateInfo.label}</Text>
+          </View>
+        )}
+
         <TouchableOpacity style={styles.folderBadge} onPress={() => setFolderModal(true)}>
           <Text style={styles.folderBadgeIcon}>{FOLDER_ICONS[currentFolder]}</Text>
           <Text style={styles.folderBadgeText}>{currentFolder}</Text>
@@ -604,10 +673,16 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.shareLinkText}>{sharingLink ? 'Generating link...' : 'Share via Link'}</Text>
         </TouchableOpacity>
 
-        {/* ✅ Follow-up Email Button */}
+        {/* Follow-up Email Button */}
         <TouchableOpacity style={[styles.emailBtn, generatingEmail && { opacity: 0.6 }]} onPress={generateFollowUpEmail} disabled={generatingEmail}>
           {generatingEmail ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.emailBtnIcon}>✉️</Text>}
           <Text style={styles.emailBtnText}>{generatingEmail ? 'Generating email...' : 'Generate Follow-up Email'}</Text>
+        </TouchableOpacity>
+
+        {/* WhatsApp Share Button */}
+        <TouchableOpacity style={[styles.whatsAppBtn, sharingWhatsApp && { opacity: 0.6 }]} onPress={shareToWhatsApp} disabled={sharingWhatsApp}>
+          {sharingWhatsApp ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.whatsAppBtnIcon}>💬</Text>}
+          <Text style={styles.whatsAppBtnText}>{sharingWhatsApp ? 'Opening WhatsApp...' : 'Share to WhatsApp'}</Text>
         </TouchableOpacity>
 
         {/* Export as Text Button */}
@@ -746,6 +821,13 @@ const styles = StyleSheet.create({
   langBadge:    { backgroundColor: '#E8F0FC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   langBadgeText:{ fontSize: 11, color: '#1A56A0', fontWeight: '600' },
 
+  // ✅ Template badge
+  templateBadge:      { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
+                        borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7,
+                        marginBottom: 10, gap: 6, alignSelf: 'flex-start' },
+  templateBadgeIcon:  { fontSize: 14 },
+  templateBadgeLabel: { fontSize: 12, fontWeight: '700' },
+
   folderBadge:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF',
                        borderWidth: 1, borderColor: '#D0DAF8', borderRadius: 10,
                        paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 6 },
@@ -778,11 +860,15 @@ const styles = StyleSheet.create({
   shareLinkIcon: { fontSize: 20 },
   shareLinkText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
-  // ✅ Email Button
   emailBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2E7D32',
                   padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
   emailBtnIcon: { fontSize: 20 },
   emailBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
+
+  whatsAppBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#25D366',
+                     padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  whatsAppBtnIcon: { fontSize: 20 },
+  whatsAppBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
   exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A',
                   padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },

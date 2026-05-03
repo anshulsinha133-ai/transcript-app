@@ -37,6 +37,65 @@ const upload = multer({
   fileFilter: (req, file, cb) => { cb(null, true); }
 });
 
+// ─── Template-aware system prompts ─────────────────────────── ✅ NEW
+const TEMPLATE_PROMPTS = {
+  meeting: `You are a meeting summarizer for Indian businesses.
+The transcript may contain Roman script Hindi, Marathi or English.
+Always respond in clear English only.
+Extract:
+1) One-line summary
+2) Key decisions made
+3) Action items with owners and deadlines
+4) Next steps / follow-ups
+Be concise and professional.`,
+
+  sales: `You are a sales call analyst for Indian businesses.
+The transcript may contain Roman script Hindi, Marathi or English.
+Always respond in clear English only.
+Extract:
+1) One-line summary of the call
+2) Customer pain points identified
+3) Products/services discussed
+4) Objections raised and how they were handled
+5) Deal stage and next steps
+6) Follow-up actions required
+Be concise and focused on sales insights.`,
+
+  lecture: `You are an academic notes assistant.
+The transcript may contain Roman script Hindi, Marathi or English.
+Always respond in clear English only.
+Extract:
+1) One-line summary of the lecture topic
+2) Key concepts and definitions covered
+3) Important examples or case studies mentioned
+4) Topics the student should review or research further
+5) Any assignments or deadlines mentioned
+Be thorough and academic in tone.`,
+
+  interview: `You are an interview assessment assistant for Indian businesses.
+The transcript may contain Roman script Hindi, Marathi or English.
+Always respond in clear English only.
+Extract:
+1) One-line summary of the interview
+2) Role being interviewed for (if mentioned)
+3) Key strengths demonstrated by the candidate
+4) Areas of concern or red flags
+5) Notable answers or quotes
+6) Recommended next steps (proceed/hold/reject)
+Be objective and professional.`,
+
+  default: `You are a meeting summarizer for Indian businesses.
+The transcript may contain Roman script Hindi, Marathi or English.
+Always respond in clear English only.
+Extract:
+1) One-line summary
+2) Key points discussed
+3) Action items (if any)
+4) Decisions made (if any)
+Be concise and professional.`,
+};
+// ───────────────────────────────────────────────────────────────
+
 app.get('/', (req, res) => {
   res.send('VoxNote Server is LIVE 🎙');
 });
@@ -72,27 +131,21 @@ app.get('/realtime-token', async (req, res) => {
   }
 });
 
-// ─── Summarize route ───
+// ─── Summarize route (template-aware) ──────────────────────── ✅ UPDATED
 app.post('/summarize', async (req, res) => {
-  const { transcript } = req.body;
+  const { transcript, mode } = req.body;
   if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
+
+  // Pick the right prompt based on mode/template
+  const systemPrompt = TEMPLATE_PROMPTS[mode] || TEMPLATE_PROMPTS.default;
+  console.log('Summarizing with mode:', mode || 'default');
+
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        {
-          role: 'system',
-          content: `You are a meeting summarizer for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
-Always respond in clear English only.
-Extract:
-1) One-line summary
-2) Key points discussed
-3) Action items (if any)
-4) Decisions made (if any)
-Be concise and professional.`
-        },
-        { role: 'user', content: 'Summarize this transcript:\n\n' + transcript }
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: 'Summarize this transcript:\n\n' + transcript }
       ],
       max_tokens: 600,
     });
@@ -411,24 +464,15 @@ Rules:
   }
 };
 
-const generateSummary = async (text) => {
+const generateSummary = async (text, mode) => {
   try {
-    const truncated = text.length > 8000 ? text.substring(0, 8000) + '...' : text;
-    const completion = await openai.chat.completions.create({
+    const truncated    = text.length > 8000 ? text.substring(0, 8000) + '...' : text;
+    const systemPrompt = TEMPLATE_PROMPTS[mode] || TEMPLATE_PROMPTS.default; // ✅ template-aware
+    const completion   = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        {
-          role: 'system',
-          content: `You are a meeting summarizer for Indian businesses.
-Always respond in clear English only.
-Extract:
-1) One-line summary
-2) Key points discussed
-3) Action items (if any)
-4) Decisions made (if any)
-Be concise and professional.`
-        },
-        { role: 'user', content: 'Summarize this:\n\n' + truncated }
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: 'Summarize this:\n\n' + truncated }
       ],
       max_tokens: 800,
     });
@@ -497,12 +541,10 @@ Rules:
   }
 };
 
-// ─── Helper: Auto detect speaker names from introductions ───
 const detectSpeakerNames = async (utterances) => {
   try {
     if (!utterances || utterances.length === 0) return {};
 
-    // Use first 30 utterances for name detection
     const dialogue = utterances.slice(0, 30).map(u =>
       `${u.speaker}: ${u.englishText || u.text}`
     ).join('\n');
@@ -549,13 +591,14 @@ Rules:
 };
 
 // ─── Helper: Process completed transcript ───
-const processTranscript = async (transcript) => {
+const processTranscript = async (transcript, mode) => {
   const rawText      = transcript.text || '';
   const detectedLang = transcript.language_code || 'en';
   const speakerList  = [...new Set((transcript.utterances || []).map(u => u.speaker))];
 
   console.log('Speakers detected:', speakerList);
   console.log('Detected language:', detectedLang);
+  console.log('Template mode:', mode || 'default');
 
   const utterances = transcript.utterances?.map(u => ({
     speaker: 'Speaker ' + u.speaker,
@@ -589,7 +632,7 @@ const processTranscript = async (transcript) => {
 
   console.log('Generating summary...');
   const summaryInput = englishText || rawText;
-  const autoSummary  = summaryInput ? await generateSummary(summaryInput) : null;
+  const autoSummary  = summaryInput ? await generateSummary(summaryInput, mode) : null; // ✅ pass mode
 
   console.log('Extracting action items...');
   const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
@@ -598,11 +641,9 @@ const processTranscript = async (transcript) => {
   const smartTitle = summaryInput ? await generateTitle(summaryInput, detectedLang) : null;
   console.log('Smart title result:', smartTitle);
 
-  // ─── ✅ Auto detect speaker names ───
   console.log('Detecting speaker names...');
   const speakerNameMap = await detectSpeakerNames(englishUtterances || utterances);
 
-  // ─── ✅ Apply detected names to utterances ───
   let finalUtterances = englishUtterances || utterances;
   if (Object.keys(speakerNameMap).length > 0) {
     finalUtterances = finalUtterances.map(u => ({
@@ -625,7 +666,7 @@ const processTranscript = async (transcript) => {
     autoSummary:  autoSummary    || null,
     actionItems:  actionItems    || [],
     speakers:     speakerList.length,
-    speakerNames: speakerNameMap, // ✅ Send detected names to frontend
+    speakerNames: speakerNameMap,
   };
 };
 
@@ -704,7 +745,7 @@ app.post('/webhook/assemblyai', async (req, res) => {
     if (transcript.status !== 'completed') return;
 
     console.log('Processing transcript (webhook)...');
-    const result = await processTranscript(transcript);
+    const result = await processTranscript(transcript); // webhook has no mode — uses default
 
     await supabase.from('transcription_jobs')
       .update({
