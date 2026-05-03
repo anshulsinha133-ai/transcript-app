@@ -96,9 +96,14 @@ export default function RecordScreen({ navigation }) {
       }
 
       await Audio.setAudioModeAsync({
-        allowsRecordingIOS:   true,
-        playsInSilentModeIOS: true,
-      });
+  allowsRecordingIOS:         true,
+  playsInSilentModeIOS:       true,
+  staysActiveInBackground:    true,  // ✅ background recording fix
+  interruptionModeIOS:        1,
+  shouldDuckAndroid:          false,
+  interruptionModeAndroid:    1,
+  playThroughEarpieceAndroid: false,
+});
 
       const { recording } = await Audio.Recording.createAsync({
         android: {
