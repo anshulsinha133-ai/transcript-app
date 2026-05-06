@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { Audio } from 'expo-av';
 
 const RecordingContext = createContext(null);
@@ -11,20 +11,45 @@ export const useRecording = () => {
 };
 
 export const RecordingProvider = ({ children }) => {
-  const [isRecording,   setIsRecording]   = useState(false);
-  const [isProcessing,  setIsProcessing]  = useState(false);
-  const [recordingTime,  setRecordingTime]  = useState(0);
-const startTimeRef = useRef(null);
-  const [statusText,    setStatusText]    = useState('Tap to start recording');
-  const [recordingUri,  setRecordingUri]  = useState(null);
+  const [isRecording,  setIsRecording]  = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [statusText,   setStatusText]   = useState('Tap to start recording');
+  const [recordingUri, setRecordingUri] = useState(null);
 
-  const recordingRef   = useRef(null);
-  const timerRef       = useRef(null);
+  const recordingRef    = useRef(null);
+  const timerRef        = useRef(null);
+  const startTimeRef    = useRef(null);
+  const appStateRef     = useRef(AppState.currentState);
+  const appStateSub     = useRef(null);
 
-  // ─── Cleanup on unmount ───
+  // ─── Track app state changes ──────────────────────────────────────────────
+  // When app returns to foreground, recalculate elapsed time from wall clock
+  // so timer is accurate even after screen-off gaps
+  useEffect(() => {
+    appStateSub.current = AppState.addEventListener('change', (nextState) => {
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        nextState === 'active' &&
+        isRecording &&
+        startTimeRef.current
+      ) {
+        // Resync timer from wall clock — interval may have drifted
+        const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+        setRecordingTime(elapsed);
+      }
+      appStateRef.current = nextState;
+    });
+
+    return () => {
+      appStateSub.current?.remove();
+    };
+  }, [isRecording]);
+
   useEffect(() => {
     return () => {
       clearInterval(timerRef.current);
+      appStateSub.current?.remove();
     };
   }, []);
 
@@ -42,9 +67,15 @@ const startTimeRef = useRef(null);
         return false;
       }
 
+      // ✅ FIX 1: staysActiveInBackground MUST be true for background recording
       await Audio.setAudioModeAsync({
-        allowsRecordingIOS:   true,
-        playsInSilentModeIOS: true,
+        allowsRecordingIOS:         true,
+        playsInSilentModeIOS:       true,
+        staysActiveInBackground:    true,   // KEY — keeps audio session alive
+        interruptionModeIOS:        1,
+        shouldDuckAndroid:          false,
+        interruptionModeAndroid:    1,
+        playThroughEarpieceAndroid: false,
       });
 
       const { recording } = await Audio.Recording.createAsync({
@@ -71,16 +102,21 @@ const startTimeRef = useRef(null);
       });
 
       recordingRef.current = recording;
+      startTimeRef.current = Date.now();
+
       setIsRecording(true);
       setRecordingTime(0);
       setStatusText('Recording... speak now');
       setRecordingUri(null);
 
-      startTimeRef.current = Date.now();
-timerRef.current = setInterval(() => {
-  const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-  setRecordingTime(elapsed);
-}, 1000);
+      // ✅ FIX 2: Use wall-clock diff for timer so it stays accurate
+      // even when the app is backgrounded and setInterval is throttled
+      timerRef.current = setInterval(() => {
+        if (startTimeRef.current) {
+          const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+          setRecordingTime(elapsed);
+        }
+      }, 1000);
 
       return true;
 
@@ -99,16 +135,23 @@ timerRef.current = setInterval(() => {
 
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
-recordingRef.current = null;
-// ✅ Calculate final duration from start time
-const finalDuration = startTimeRef.current
-  ? Math.floor((Date.now() - startTimeRef.current) / 1000)
-  : recordingTime;
-setRecordingTime(finalDuration);
-setRecordingUri(uri);
-return uri;
+      recordingRef.current = null;
 
-      return uri;
+      // ✅ FIX 3: Calculate final duration from wall clock (accurate even after background)
+      const finalDuration = startTimeRef.current
+        ? Math.floor((Date.now() - startTimeRef.current) / 1000)
+        : recordingTime;
+
+      setRecordingTime(finalDuration);
+      setRecordingUri(uri);
+
+      // ✅ FIX 4: Release audio session after stopping
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS:      false,
+        staysActiveInBackground: false,
+      }).catch(() => {});
+
+      return uri; // ✅ single return — no duplicate
 
     } catch (err) {
       Alert.alert('Error', 'Could not stop recording: ' + err.message);
@@ -122,6 +165,7 @@ return uri;
     setIsRecording(false);
     setIsProcessing(false);
     setRecordingTime(0);
+    startTimeRef.current = null;
     setStatusText('Tap to start recording');
     setRecordingUri(null);
   };

@@ -1,129 +1,167 @@
+// src/utils/storage.js
 import { supabase } from '../supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const saveTranscript = async (transcriptObj) => {
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error('Not logged in');
+const PENDING_JOB_KEY = 'voxnote_pending_job';
 
-    const { data, error } = await supabase
-      .from('transcripts')
-      .insert({
-        user_id:      user.id,
-        title:        transcriptObj.title,
-        text:         transcriptObj.text,
-        duration:     transcriptObj.duration,
-        word_count:   transcriptObj.wordCount,
-        audio_path:   transcriptObj.audioPath,
-        utterances:   transcriptObj.utterances   || null,
-        words:        transcriptObj.words        || null,
-        english_text: transcriptObj.englishText  || null,
-        original_text:transcriptObj.originalText || null,
-        auto_summary: transcriptObj.autoSummary  || null,
-        action_items: transcriptObj.actionItems  || null,
-        mode:         transcriptObj.mode         || 'en',
-        folder:       transcriptObj.folder       || 'General',
-      })
-      .select('id')
-      .single();
-
-    if (error) throw error;
-
-    console.log('Transcript saved with UUID:', data.id);
-    return { success: true, id: data.id };
-
-  } catch (err) {
-    console.error('Save error:', err);
-    return { success: false, id: null };
-  }
+const getCurrentUserId = async () => {
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) throw new Error('Not authenticated');
+  return user.id;
 };
 
-export const getAllTranscripts = async () => {
+const mapDbToApp = (row) => ({
+  id:           row.id,
+  userId:       row.user_id,
+  title:        row.title,
+  text:         row.text,
+  englishText:  row.english_text  || null,
+  originalText: row.original_text || null,
+  duration:     row.duration      || null,
+  wordCount:    row.word_count    || 0,
+  utterances:   row.utterances    || [],
+  words:        row.words         || [],
+  autoSummary:  row.auto_summary  || null,
+  actionItems:  row.action_items  || [],
+  folder:       row.folder        || 'General',
+  mode:         row.mode          || 'en',
+  shareToken:   row.share_token   || null,
+  detectedLang: row.mode          || 'en',
+  createdAt:    row.created_at,
+});
+
+// Called by HomeScreen: await getAllTranscripts(user?.id)
+export const getAllTranscripts = async (userId = null) => {
   try {
+    const uid = userId || await getCurrentUserId();
     const { data, error } = await supabase
       .from('transcripts')
       .select('*')
+      .eq('user_id', uid)
       .order('created_at', { ascending: false });
-
     if (error) throw error;
-
-    return data.map(t => ({
-      id:           t.id,
-      title:        t.title,
-      text:         t.text,
-      duration:     t.duration,
-      wordCount:    t.word_count,
-      audioPath:    t.audio_path,
-      utterances:   t.utterances   || null,
-      words:        t.words        || null,
-      englishText:  t.english_text || null,
-      originalText: t.original_text|| null,
-      autoSummary:  t.auto_summary || null,
-      actionItems:  t.action_items || null,
-      folder:       t.folder       || 'General',
-      mode:         t.mode         || 'en',
-      createdAt:    t.created_at,
-    }));
+    return (data || []).map(mapDbToApp);
   } catch (err) {
-    console.error('Load error:', err);
+    console.error('getAllTranscripts error:', err.message);
     return [];
   }
 };
 
-export const deleteTranscript = async (id) => {
+export const saveTranscript = async (transcriptData) => {
   try {
-    const { error } = await supabase
+    const userId = await getCurrentUserId();
+    const { data, error } = await supabase
       .from('transcripts')
-      .delete()
-      .eq('id', id);
-
+      .insert([{
+        user_id:       userId,
+        title:         transcriptData.title        || 'Untitled Recording',
+        text:          transcriptData.text         || '',
+        english_text:  transcriptData.englishText  || null,
+        original_text: transcriptData.originalText || null,
+        duration:      transcriptData.duration     || null,
+        word_count:    transcriptData.wordCount     || 0,
+        utterances:    transcriptData.utterances   || [],
+        words:         transcriptData.words        || [],
+        auto_summary:  transcriptData.autoSummary  || null,
+        action_items:  transcriptData.actionItems  || [],
+        folder:        transcriptData.folder       || 'General',
+        mode:          transcriptData.mode         || 'en',
+      }])
+      .select()
+      .single();
     if (error) throw error;
-    return true;
+    return { success: true, id: data.id, data };
   } catch (err) {
-    console.error('Delete error:', err);
-    return false;
+    console.error('saveTranscript error:', err.message);
+    return { success: false, error: err.message };
   }
 };
 
-// ─── Update speaker names ───
-export const updateSpeakerNames = async (transcriptId, utterances, speakerMap) => {
+// Called by HomeScreen: await deleteTranscript(id, user?.id)
+export const deleteTranscript = async (id, userId = null) => {
   try {
-    console.log('updateSpeakerNames called');
-    console.log('transcriptId:', transcriptId);
-    console.log('speakerMap:', speakerMap);
-
-    if (!transcriptId) throw new Error('No transcript ID provided');
-
-    const updatedUtterances = utterances.map(u => ({
-      ...u,
-      speaker: speakerMap[u.speaker] !== undefined ? speakerMap[u.speaker] : u.speaker,
-    }));
-
-    const { data, error } = await supabase
+    const uid = userId || await getCurrentUserId();
+    const { error } = await supabase
       .from('transcripts')
-      .update({ utterances: updatedUtterances })
-      .eq('id', transcriptId)
-      .select('id, utterances');
-
+      .delete()
+      .eq('id', id)
+      .eq('user_id', uid);
     if (error) throw error;
-    if (!data || data.length === 0) throw new Error('No rows updated');
+    return { success: true };
+  } catch (err) {
+    console.error('deleteTranscript error:', err.message);
+    return { success: false, error: err.message };
+  }
+};
 
-    return { success: true, utterances: updatedUtterances };
+// Client-side search on already user-filtered in-memory data
+export const searchTranscripts = (transcripts, query) => {
+  if (!query?.trim()) return transcripts.map(t => ({ ...t, matchContext: null }));
+  const q = query.toLowerCase();
+  return transcripts.map(t => {
+    if (t.title?.toLowerCase().includes(q))
+      return { ...t, matchContext: { field: 'title', snippet: t.title } };
+    const mu = t.utterances?.find(u =>
+      u.text?.toLowerCase().includes(q) ||
+      u.englishText?.toLowerCase().includes(q) ||
+      u.speaker?.toLowerCase().includes(q)
+    );
+    if (mu) {
+      const s = mu.englishText || mu.text || '';
+      const i = s.toLowerCase().indexOf(q);
+      const a = Math.max(0, i - 30), b = Math.min(s.length, i + q.length + 60);
+      return { ...t, matchContext: { field:'speaker', speaker:mu.speaker, snippet:(a>0?'...':'')+s.slice(a,b)+(b<s.length?'...':'') } };
+    }
+    if (t.autoSummary?.toLowerCase().includes(q)) {
+      const i = t.autoSummary.toLowerCase().indexOf(q);
+      const a = Math.max(0, i-30), b = Math.min(t.autoSummary.length, i+q.length+80);
+      return { ...t, matchContext: { field:'summary', snippet:(a>0?'...':'')+t.autoSummary.slice(a,b)+'...' } };
+    }
+    const ma = t.actionItems?.find(a => a.task?.toLowerCase().includes(q) || a.owner?.toLowerCase().includes(q));
+    if (ma) return { ...t, matchContext: { field:'action', snippet: ma.task } };
+    const txt = t.englishText || t.text || '';
+    if (txt.toLowerCase().includes(q)) {
+      const i = txt.toLowerCase().indexOf(q);
+      const a = Math.max(0, i-30), b = Math.min(txt.length, i+q.length+80);
+      return { ...t, matchContext: { field:'transcript', snippet:(a>0?'...':'')+txt.slice(a,b)+'...' } };
+    }
+    return null;
+  }).filter(Boolean);
+};
+
+export const createTranscriptObj = (title, text, duration = 0) => ({
+  title:       title || 'Untitled Recording',
+  text:        text  || '',
+  englishText: null,
+  duration:    duration,
+  wordCount:   text ? text.split(' ').filter(Boolean).length : 0,
+  utterances:  [],
+  words:       [],
+  autoSummary: null,
+  actionItems: [],
+  folder:      'General',
+  mode:        'en',
+});
+
+export const updateSpeakerNames = async (id, utterances, nameMap) => {
+  try {
+    const userId = await getCurrentUserId();
+    const updated = utterances.map(u => ({ ...u, speaker: nameMap[u.speaker] || u.speaker }));
+    const { error } = await supabase.from('transcripts')
+      .update({ utterances: updated }).eq('id', id).eq('user_id', userId);
+    if (error) throw error;
+    return { success: true, utterances: updated };
   } catch (err) {
     console.error('updateSpeakerNames error:', err.message);
     return { success: false, error: err.message };
   }
 };
 
-// ─── Update folder ───
-export const updateTranscriptFolder = async (transcriptId, folder) => {
+export const updateTranscriptFolder = async (id, folder) => {
   try {
-    console.log('Updating folder:', transcriptId, '→', folder);
-
-    const { error } = await supabase
-      .from('transcripts')
-      .update({ folder })
-      .eq('id', transcriptId);
-
+    const userId = await getCurrentUserId();
+    const { error } = await supabase.from('transcripts')
+      .update({ folder }).eq('id', id).eq('user_id', userId);
     if (error) throw error;
     return { success: true };
   } catch (err) {
@@ -132,122 +170,38 @@ export const updateTranscriptFolder = async (transcriptId, folder) => {
   }
 };
 
-// ─── NEW: Full-text search across all transcript fields ───
-export const searchTranscripts = (transcripts, query) => {
-  if (!query || !query.trim()) return transcripts.map(t => ({ ...t, matchContext: null }));
-
-  const q = query.toLowerCase().trim();
-
-  const results = [];
-
-  for (const t of transcripts) {
-    let matchContext = null;
-
-    // 1. Title match
-    if (t.title?.toLowerCase().includes(q)) {
-      matchContext = { field: 'title', snippet: null };
-    }
-
-    // 2. English text match
-    if (!matchContext && t.englishText?.toLowerCase().includes(q)) {
-      matchContext = {
-        field:   'transcript',
-        snippet: getSnippet(t.englishText, q),
-      };
-    }
-
-    // 3. Original text match (Hindi/Marathi)
-    if (!matchContext && t.text?.toLowerCase().includes(q)) {
-      matchContext = {
-        field:   'transcript',
-        snippet: getSnippet(t.text, q),
-      };
-    }
-
-    // 4. AI Summary match
-    if (!matchContext && t.autoSummary?.toLowerCase().includes(q)) {
-      matchContext = {
-        field:   'summary',
-        snippet: getSnippet(t.autoSummary, q),
-      };
-    }
-
-    // 5. Utterances match — find which speaker said it
-    if (!matchContext && t.utterances?.length > 0) {
-      for (const u of t.utterances) {
-        const uText = (u.englishText || u.text || '').toLowerCase();
-        if (uText.includes(q)) {
-          matchContext = {
-            field:   'speaker',
-            speaker: u.speaker,
-            snippet: getSnippet(u.englishText || u.text, q),
-          };
-          break;
-        }
-      }
-    }
-
-    // 6. Action items match
-    if (!matchContext && t.actionItems?.length > 0) {
-      for (const a of t.actionItems) {
-        const aText = (a.task || '').toLowerCase();
-        if (aText.includes(q)) {
-          matchContext = {
-            field:   'action',
-            snippet: a.task,
-          };
-          break;
-        }
-      }
-    }
-
-    if (matchContext) {
-      results.push({ ...t, matchContext });
-    }
+export const updateAutoSummary = async (id, summary) => {
+  try {
+    const userId = await getCurrentUserId();
+    const { error } = await supabase.from('transcripts')
+      .update({ auto_summary: summary }).eq('id', id).eq('user_id', userId);
+    if (error) throw error;
+    return { success: true };
+  } catch (err) {
+    console.error('updateAutoSummary error:', err.message);
+    return { success: false, error: err.message };
   }
-
-  return results;
 };
 
-// ─── Helper: extract snippet around matched word ───
-const getSnippet = (text, query) => {
-  if (!text) return null;
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return null;
-  const start  = Math.max(0, idx - 40);
-  const end    = Math.min(text.length, idx + query.length + 60);
-  const prefix = start > 0 ? '...' : '';
-  const suffix = end < text.length ? '...' : '';
-  return prefix + text.substring(start, end) + suffix;
+export const updateTranscriptTitle = async (id, title) => {
+  try {
+    const userId = await getCurrentUserId();
+    const { error } = await supabase.from('transcripts')
+      .update({ title }).eq('id', id).eq('user_id', userId);
+    if (error) throw error;
+    return { success: true };
+  } catch (err) {
+    console.error('updateTranscriptTitle error:', err.message);
+    return { success: false, error: err.message };
+  }
 };
 
-export const createTranscriptObj = (
-  title,
-  text,
-  duration,
-  audioPath    = null,
-  utterances   = null,
-  words        = null,
-  englishText  = null,
-  originalText = null,
-  autoSummary  = null,
-  actionItems  = null,
-  mode         = 'en',
-  folder       = 'General'
-) => ({
-  id:           null,
-  title:        title,
-  text:         text,
-  duration:     duration,
-  audioPath:    audioPath,
-  utterances:   utterances,
-  words:        words,
-  englishText:  englishText,
-  originalText: originalText,
-  autoSummary:  autoSummary,
-  actionItems:  actionItems,
-  folder:       folder,
-  mode:         mode,
-  createdAt:    new Date().toISOString(),
-  wordCount:    text ? text.split(' ').length : 0,
-});
+export const savePendingJob = async (jobId) => {
+  try { await AsyncStorage.setItem(PENDING_JOB_KEY, jobId); }
+  catch (err) { console.error('savePendingJob error:', err.message); }
+};
+
+export const clearPendingJob = async () => {
+  try { await AsyncStorage.removeItem(PENDING_JOB_KEY); }
+  catch (err) { console.error('clearPendingJob error:', err.message); }
+};

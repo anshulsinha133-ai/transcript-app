@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, SafeAreaView, Alert,
@@ -21,14 +21,303 @@ const FOLDER_ICONS = {
   Lectures: '🎓',
 };
 
-// ─── Template config (for badge display) ─────────────────────── ✅ NEW
+// ─── Template config ──────────────────────────────────────────────────────────
 const TEMPLATE_MAP = {
-  meeting:   { icon: '👥', label: 'Meeting',    color: '#1A56A0', bg: '#E8F0FC' },
-  sales:     { icon: '💰', label: 'Sales Call', color: '#C85A00', bg: '#FEF3E8' },
-  lecture:   { icon: '🎓', label: 'Lecture',    color: '#1A7A4A', bg: '#E8F5EE' },
-  interview: { icon: '🧑‍💼', label: 'Interview', color: '#8B1AAF', bg: '#F3E8FE' },
+  meeting:   { icon: '🤝', label: 'Meeting Notes', color: '#1A56A0', bg: '#E8F0FC' },
+  sales:     { icon: '📞', label: 'Sales Call',    color: '#059669', bg: '#ECFDF5' },
+  lecture:   { icon: '🎓', label: 'Lecture Notes', color: '#7C3AED', bg: '#F5F3FF' },
+  doctor:    { icon: '🏥', label: 'Doctor Notes',  color: '#DC2626', bg: '#FEF2F2' },
+  legal:     { icon: '⚖️', label: 'Legal Notes',   color: '#92400E', bg: '#FFFBEB' },
+  interview: { icon: '👤', label: 'Interview',     color: '#0369A1', bg: '#F0F9FF' },
 };
-// ──────────────────────────────────────────────────────────────────
+
+// ─── Helper: parse JSON summary string ───────────────────────────────────────
+const parseStructuredSummary = (summary) => {
+  if (!summary) return null;
+  if (typeof summary === 'object') return summary;
+  try {
+    const clean = summary
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    return JSON.parse(clean);
+  } catch {
+    return null;
+  }
+};
+
+// ─── Structured summary renderer ─────────────────────────────────────────────
+const StructuredSummary = ({ summary, mode }) => {
+  const data = useMemo(() => parseStructuredSummary(summary), [summary]);
+  if (!data) return null;
+
+  const cfg = TEMPLATE_MAP[mode] || { color: '#374151', bg: '#F9FAFB' };
+
+  const SectionLabel = ({ icon, text, color }) => (
+    <View style={[ss.sectionLabel, { borderLeftColor: color || cfg.color }]}>
+      <Text style={[ss.sectionLabelText, { color: color || cfg.color }]}>{icon}  {text}</Text>
+    </View>
+  );
+
+  const BulletItem = ({ text, color }) => (
+    <View style={ss.bulletRow}>
+      <View style={[ss.bullet, { backgroundColor: color || cfg.color }]} />
+      <Text style={ss.bulletText}>{text}</Text>
+    </View>
+  );
+
+  const ActionRow = ({ item, index }) => (
+    <View style={[ss.actionRow, index % 2 === 0 ? ss.actionEven : ss.actionOdd]}>
+      <View style={[ss.actionNum, { backgroundColor: cfg.color }]}>
+        <Text style={ss.actionNumText}>{index + 1}</Text>
+      </View>
+      <View style={ss.actionContent}>
+        <Text style={ss.actionTask}>{item.task}</Text>
+        <View style={ss.actionMeta}>
+          {item.owner && item.owner !== 'Unassigned' && (
+            <Text style={ss.actionMetaText}>👤 {item.owner}</Text>
+          )}
+          {item.deadline && item.deadline !== 'Not mentioned' && (
+            <Text style={ss.actionMetaText}>📅 {item.deadline}</Text>
+          )}
+        </View>
+      </View>
+    </View>
+  );
+
+  const HighlightBox = ({ icon, label, value, bg, color }) => {
+    if (!value || value === 'Not mentioned') return null;
+    return (
+      <View style={[ss.highlightBox, { backgroundColor: bg || cfg.bg, borderColor: color || cfg.color }]}>
+        <Text style={[ss.highlightLabel, { color: color || cfg.color }]}>{icon} {label}</Text>
+        <Text style={ss.highlightValue}>{value}</Text>
+      </View>
+    );
+  };
+
+  return (
+    <View>
+      {/* One-line summary */}
+      {data.summary && (
+        <View style={[ss.summaryLine, { borderLeftColor: cfg.color }]}>
+          <Text style={ss.summaryLineText}>{data.summary}</Text>
+        </View>
+      )}
+
+      {/* ── MEETING ── */}
+      {mode === 'meeting' && <>
+        {data.key_decisions?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="✅" text="Key Decisions" />
+            {data.key_decisions.map((d, i) => <BulletItem key={i} text={d} />)}
+          </View>
+        )}
+        {data.action_items?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="📋" text="Action Items" />
+            {data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}
+          </View>
+        )}
+        <HighlightBox icon="📅" label="Next Meeting" value={data.next_meeting_date} />
+      </>}
+
+      {/* ── SALES ── */}
+      {mode === 'sales' && <>
+        <HighlightBox icon="🏢" label="Lead" value={data.lead_name} bg="#ECFDF5" color="#059669" />
+        {data.requirements?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="🎯" text="Requirements" color="#059669" />
+            {data.requirements.map((r, i) => <BulletItem key={i} text={r} color="#059669" />)}
+          </View>
+        )}
+        {data.objections?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="⚠️" text="Objections" color="#D97706" />
+            {data.objections.map((o, i) => <BulletItem key={i} text={o} color="#D97706" />)}
+          </View>
+        )}
+        {data.next_steps?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="🚀" text="Next Steps" color="#059669" />
+            {data.next_steps.map((s, i) => <BulletItem key={i} text={s} color="#059669" />)}
+          </View>
+        )}
+      </>}
+
+      {/* ── LECTURE ── */}
+      {mode === 'lecture' && <>
+        {data.key_concepts?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="💡" text="Key Concepts" color="#7C3AED" />
+            {data.key_concepts.map((c, i) => <BulletItem key={i} text={c} color="#7C3AED" />)}
+          </View>
+        )}
+        {data.definitions?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="📖" text="Definitions" color="#7C3AED" />
+            {data.definitions.map((d, i) => (
+              <View key={i} style={[ss.defBox, { borderLeftColor: '#7C3AED' }]}>
+                <Text style={[ss.defTerm, { color: '#7C3AED' }]}>{d.term}</Text>
+                <Text style={ss.defMeaning}>{d.definition}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        {data.study_questions?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="❓" text="Study Questions" color="#7C3AED" />
+            {data.study_questions.map((q, i) => (
+              <View key={i} style={ss.questionRow}>
+                <Text style={[ss.questionNum, { color: '#7C3AED' }]}>Q{i + 1}</Text>
+                <Text style={ss.questionText}>{q}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </>}
+
+      {/* ── DOCTOR ── */}
+      {mode === 'doctor' && <>
+        {data.patient_complaint && (
+          <View style={[ss.plainBox, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
+            <Text style={[ss.plainBoxLabel, { color: '#DC2626' }]}>🩺 Patient Complaint</Text>
+            <Text style={ss.plainBoxText}>{data.patient_complaint}</Text>
+          </View>
+        )}
+        <HighlightBox icon="🔬" label="Diagnosis" value={data.diagnosis} bg="#FEF2F2" color="#DC2626" />
+        {data.prescription?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="💊" text="Prescription" color="#DC2626" />
+            {data.prescription.map((p, i) => (
+              <View key={i} style={[ss.actionRow, i % 2 === 0 ? ss.actionEven : ss.actionOdd]}>
+                <Text style={[ss.medicineName, { color: '#DC2626' }]}>{p.medicine}</Text>
+                <View style={ss.actionMeta}>
+                  {p.dosage    !== 'Not specified' && <Text style={ss.actionMetaText}>💊 {p.dosage}</Text>}
+                  {p.frequency !== 'Not specified' && <Text style={ss.actionMetaText}>🔁 {p.frequency}</Text>}
+                  {p.duration  !== 'Not specified' && <Text style={ss.actionMetaText}>⏱ {p.duration}</Text>}
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+        <HighlightBox icon="📅" label="Follow-up" value={data.followup_date} bg="#FEF2F2" color="#DC2626" />
+      </>}
+
+      {/* ── LEGAL ── */}
+      {mode === 'legal' && <>
+        <HighlightBox icon="👤" label="Client" value={data.client_details} bg="#FFFBEB" color="#92400E" />
+        {data.case_summary && (
+          <View style={[ss.plainBox, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}>
+            <Text style={[ss.plainBoxLabel, { color: '#92400E' }]}>📄 Case Summary</Text>
+            <Text style={ss.plainBoxText}>{data.case_summary}</Text>
+          </View>
+        )}
+        {data.action_items?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="📋" text="Action Items" color="#92400E" />
+            {data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}
+          </View>
+        )}
+        <HighlightBox icon="⚖️" label="Next Hearing" value={data.next_hearing_date} bg="#FFFBEB" color="#92400E" />
+      </>}
+
+      {/* ── INTERVIEW ── */}
+      {mode === 'interview' && <>
+        <HighlightBox icon="👤" label="Candidate" value={data.candidate_name} bg="#F0F9FF" color="#0369A1" />
+        {data.key_answers?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="💬" text="Key Answers" color="#0369A1" />
+            {data.key_answers.map((a, i) => <BulletItem key={i} text={a} color="#0369A1" />)}
+          </View>
+        )}
+        {(data.evaluation?.strengths?.length > 0 || data.evaluation?.concerns?.length > 0) && (
+          <View style={ss.block}>
+            <SectionLabel icon="📊" text="Evaluation" color="#0369A1" />
+            {data.evaluation?.strengths?.length > 0 && (
+              <View style={ss.evalBlock}>
+                <Text style={ss.evalSubLabel}>✅ Strengths</Text>
+                {data.evaluation.strengths.map((s, i) => <BulletItem key={i} text={s} color="#059669" />)}
+              </View>
+            )}
+            {data.evaluation?.concerns?.length > 0 && (
+              <View style={[ss.evalBlock, { marginTop: 8 }]}>
+                <Text style={ss.evalSubLabel}>⚠️ Concerns</Text>
+                {data.evaluation.concerns.map((c, i) => <BulletItem key={i} text={c} color="#DC2626" />)}
+              </View>
+            )}
+          </View>
+        )}
+        <HighlightBox icon="🎯" label="Decision" value={data.decision} bg="#F0F9FF" color="#0369A1" />
+      </>}
+
+      {/* ── DEFAULT (no template or language mode) ── */}
+      {(!mode || !TEMPLATE_MAP[mode]) && <>
+        {data.key_points?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="💡" text="Key Points" />
+            {data.key_points.map((p, i) => <BulletItem key={i} text={p} />)}
+          </View>
+        )}
+        {data.action_items?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="📋" text="Action Items" />
+            {data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}
+          </View>
+        )}
+        {data.decisions?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="✅" text="Decisions" />
+            {data.decisions.map((d, i) => <BulletItem key={i} text={d} />)}
+          </View>
+        )}
+      </>}
+    </View>
+  );
+};
+
+// Structured summary styles
+const ss = StyleSheet.create({
+  summaryLine:      { borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 8,
+                      marginBottom: 14, backgroundColor: '#FAFAFA', borderRadius: 4 },
+  summaryLineText:  { fontSize: 14, color: '#374151', lineHeight: 22, fontStyle: 'italic' },
+  block:            { marginBottom: 16 },
+  sectionLabel:     { borderLeftWidth: 3, paddingLeft: 10, marginBottom: 8 },
+  sectionLabelText: { fontSize: 13, fontWeight: '700' },
+  bulletRow:        { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6, paddingLeft: 4 },
+  bullet:           { width: 6, height: 6, borderRadius: 3, marginTop: 7, marginRight: 8 },
+  bulletText:       { flex: 1, fontSize: 13, color: '#374151', lineHeight: 20 },
+  actionRow:        { flexDirection: 'row', alignItems: 'flex-start',
+                      paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, marginBottom: 4 },
+  actionEven:       { backgroundColor: '#F8FAFC' },
+  actionOdd:        { backgroundColor: '#F1F5F9' },
+  actionNum:        { width: 20, height: 20, borderRadius: 10, alignItems: 'center',
+                      justifyContent: 'center', marginRight: 8, marginTop: 1 },
+  actionNumText:    { color: '#fff', fontSize: 10, fontWeight: '700' },
+  actionContent:    { flex: 1 },
+  actionTask:       { fontSize: 13, color: '#1E293B', fontWeight: '600', marginBottom: 3 },
+  actionMeta:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  actionMetaText:   { fontSize: 11, color: '#64748B' },
+  highlightBox:     { borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 10 },
+  highlightLabel:   { fontSize: 11, fontWeight: '700', textTransform: 'uppercase',
+                      letterSpacing: 0.5, marginBottom: 3 },
+  highlightValue:   { fontSize: 14, color: '#1E293B', fontWeight: '500' },
+  plainBox:         { borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 10 },
+  plainBoxLabel:    { fontSize: 12, fontWeight: '700', marginBottom: 6 },
+  plainBoxText:     { fontSize: 13, color: '#374151', lineHeight: 20 },
+  defBox:           { borderLeftWidth: 3, paddingLeft: 10, paddingVertical: 6,
+                      backgroundColor: '#F8FAFC', borderRadius: 4, marginBottom: 8 },
+  defTerm:          { fontSize: 13, fontWeight: '700', marginBottom: 2 },
+  defMeaning:       { fontSize: 12, color: '#4B5563', lineHeight: 18 },
+  questionRow:      { flexDirection: 'row', marginBottom: 8 },
+  questionNum:      { fontSize: 12, fontWeight: '700', width: 26, marginTop: 1 },
+  questionText:     { flex: 1, fontSize: 13, color: '#374151', lineHeight: 20 },
+  medicineName:     { fontSize: 13, fontWeight: '700', marginBottom: 3, flex: 1 },
+  evalBlock:        { backgroundColor: '#F8FAFC', borderRadius: 8, padding: 8 },
+  evalSubLabel:     { fontSize: 11, fontWeight: '700', color: '#64748B',
+                      marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 },
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 const SPEAKER_COLORS = [
   '#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF',
@@ -77,8 +366,12 @@ export default function TranscriptScreen({ route }) {
   const hasTranslation = transcript.englishText &&
     transcript.englishText !== transcript.text;
 
-  // ✅ Resolve template from mode field
   const templateInfo = TEMPLATE_MAP[transcript.mode] || null;
+
+  // Determine if current summary is structured JSON or plain text
+  const isStructuredSummary = useMemo(() => {
+    return parseStructuredSummary(summary) !== null;
+  }, [summary]);
 
   const handleSpeakerTap = (speaker) => {
     setRenamingSpeaker(speaker);
@@ -164,7 +457,6 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  // ─── Generate Share Link ───
   const generateShareLink = async () => {
     try {
       setSharingLink(true);
@@ -192,7 +484,6 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  // ─── Generate Follow-up Email ───
   const generateFollowUpEmail = async () => {
     try {
       setGeneratingEmail(true);
@@ -232,7 +523,6 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  // ─── Share to WhatsApp ───
   const shareToWhatsApp = async () => {
     try {
       setSharingWhatsApp(true);
@@ -242,7 +532,9 @@ export default function TranscriptScreen({ route }) {
       message += `🗓️ ${formatDate(transcript.createdAt)}\n`;
 
       if (activeSummary) {
-        message += `\n🤖 *Summary:*\n${activeSummary}\n`;
+        // If structured JSON, extract just the summary line for WhatsApp
+        const parsed = parseStructuredSummary(activeSummary);
+        message += `\n🤖 *Summary:*\n${parsed ? parsed.summary : activeSummary}\n`;
       }
 
       if (transcript.actionItems?.length > 0) {
@@ -276,7 +568,6 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  // ─── PDF Export ───
   const exportAsPDF = async () => {
     try {
       setExportingPDF(true);
@@ -401,14 +692,14 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  // ─── Summary — pass mode so server uses right prompt ──────── ✅ UPDATED
+  // ─── Summary — pass mode so server uses right prompt ─────────────────────
   const getSummary = async () => {
     setLoadingSummary(true);
     setSummary(null);
     try {
       const result = await summarizeTranscript(
         transcript.englishText || transcript.text,
-        transcript.mode // ✅ pass template mode
+        transcript.mode
       );
       if (result.success) setSummary(result.summary);
       else Alert.alert('Error', 'Could not generate summary.');
@@ -453,10 +744,13 @@ export default function TranscriptScreen({ route }) {
 
   const getLangBadge = () => {
     const lang = transcript.detectedLang || 'en';
-    if (lang === 'en') return 'English';
-    if (lang === 'hi') return 'Hindi';
-    if (lang === 'mr') return 'Marathi';
-    return 'Auto';
+    const LANG_NAMES = {
+      en: 'English', hi: 'Hindi',     mr: 'Marathi',
+      te: 'Telugu',  ta: 'Tamil',     kn: 'Kannada',
+      ml: 'Malayalam', bn: 'Bengali', gu: 'Gujarati',
+      pa: 'Punjabi', ur: 'Urdu',
+    };
+    return LANG_NAMES[lang] || 'Auto';
   };
 
   const renderFolderModal = () => (
@@ -622,7 +916,7 @@ export default function TranscriptScreen({ route }) {
           </View>
         </View>
 
-        {/* ✅ NEW — Template badge (only shown if template was set) */}
+        {/* Template badge */}
         {templateInfo && (
           <View style={[styles.templateBadge, { backgroundColor: templateInfo.bg, borderColor: templateInfo.color }]}>
             <Text style={styles.templateBadgeIcon}>{templateInfo.icon}</Text>
@@ -651,7 +945,6 @@ export default function TranscriptScreen({ route }) {
           </TouchableOpacity>
         </View>
 
-        {/* AI Chat Button */}
         <TouchableOpacity style={styles.chatBtn} onPress={() => setShowChat(true)}>
           <Text style={styles.chatBtnIcon}>💬</Text>
           <View style={styles.chatBtnTextWrapper}>
@@ -661,31 +954,26 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.chatBtnArrow}>›</Text>
         </TouchableOpacity>
 
-        {/* PDF Export Button */}
         <TouchableOpacity style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]} onPress={exportAsPDF} disabled={exportingPDF}>
           {exportingPDF ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.pdfBtnIcon}>📄</Text>}
           <Text style={styles.pdfBtnText}>{exportingPDF ? 'Generating PDF...' : 'Export as PDF'}</Text>
         </TouchableOpacity>
 
-        {/* Share Link Button */}
         <TouchableOpacity style={[styles.shareLinkBtn, sharingLink && { opacity: 0.6 }]} onPress={generateShareLink} disabled={sharingLink}>
           {sharingLink ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.shareLinkIcon}>🔗</Text>}
           <Text style={styles.shareLinkText}>{sharingLink ? 'Generating link...' : 'Share via Link'}</Text>
         </TouchableOpacity>
 
-        {/* Follow-up Email Button */}
         <TouchableOpacity style={[styles.emailBtn, generatingEmail && { opacity: 0.6 }]} onPress={generateFollowUpEmail} disabled={generatingEmail}>
           {generatingEmail ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.emailBtnIcon}>✉️</Text>}
           <Text style={styles.emailBtnText}>{generatingEmail ? 'Generating email...' : 'Generate Follow-up Email'}</Text>
         </TouchableOpacity>
 
-        {/* WhatsApp Share Button */}
         <TouchableOpacity style={[styles.whatsAppBtn, sharingWhatsApp && { opacity: 0.6 }]} onPress={shareToWhatsApp} disabled={sharingWhatsApp}>
           {sharingWhatsApp ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.whatsAppBtnIcon}>💬</Text>}
           <Text style={styles.whatsAppBtnText}>{sharingWhatsApp ? 'Opening WhatsApp...' : 'Share to WhatsApp'}</Text>
         </TouchableOpacity>
 
-        {/* Export as Text Button */}
         <TouchableOpacity style={styles.exportBtn} onPress={exportAsText}>
           <Text style={styles.exportBtnIcon}>📋</Text>
           <Text style={styles.exportBtnText}>Export Full Transcript (Text)</Text>
@@ -697,12 +985,21 @@ export default function TranscriptScreen({ route }) {
             <Text style={styles.loadingText}>Generating AI summary...</Text>
           </View>
         )}
+
+        {/* ─── AI Summary — structured or plain text ─────────────────── */}
         {summary && (
           <View style={styles.summaryBox}>
-            <Text style={styles.summaryTitle}>🤖 AI Summary</Text>
-            <Text selectable={true} style={styles.summaryText}>{summary}</Text>
+            <View style={styles.summaryHeader}>
+              <Text style={styles.summaryTitle}>🤖 AI {templateInfo ? templateInfo.label : 'Summary'}</Text>
+            </View>
+            {isStructuredSummary ? (
+              <StructuredSummary summary={summary} mode={transcript.mode} />
+            ) : (
+              <Text selectable={true} style={styles.summaryText}>{summary}</Text>
+            )}
           </View>
         )}
+        {/* ─────────────────────────────────────────────────────────────── */}
 
         {transcript.actionItems?.length > 0 && (
           <View style={styles.actionItemsBox}>
@@ -821,7 +1118,6 @@ const styles = StyleSheet.create({
   langBadge:    { backgroundColor: '#E8F0FC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   langBadgeText:{ fontSize: 11, color: '#1A56A0', fontWeight: '600' },
 
-  // ✅ Template badge
   templateBadge:      { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
                         borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7,
                         marginBottom: 10, gap: 6, alignSelf: 'flex-start' },
@@ -878,10 +1174,12 @@ const styles = StyleSheet.create({
   loadingBox:   { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16,
                   backgroundColor: '#EFF4FF', borderRadius: 10, marginBottom: 16 },
   loadingText:  { color: '#1A56A0', fontSize: 13 },
-  summaryBox:   { backgroundColor: '#D6F0E2', padding: 16, borderRadius: 12,
-                  marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
-  summaryTitle: { fontSize: 14, fontWeight: 'bold', color: '#1A7A4A', marginBottom: 10 },
-  summaryText:  { fontSize: 13, color: '#333', lineHeight: 22 },
+
+  summaryBox:    { backgroundColor: '#D6F0E2', padding: 16, borderRadius: 12,
+                   marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
+  summaryHeader: { marginBottom: 12 },
+  summaryTitle:  { fontSize: 14, fontWeight: 'bold', color: '#1A7A4A' },
+  summaryText:   { fontSize: 13, color: '#333', lineHeight: 22 },
 
   actionItemsBox:      { backgroundColor: '#FFF3E0', padding: 16, borderRadius: 12,
                          marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#FF9800' },

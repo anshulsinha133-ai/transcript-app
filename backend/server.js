@@ -37,64 +37,168 @@ const upload = multer({
   fileFilter: (req, file, cb) => { cb(null, true); }
 });
 
-// ─── Template-aware system prompts ─────────────────────────── ✅ NEW
+// ─── Template-aware system prompts (Structured JSON output) ──────────────────
 const TEMPLATE_PROMPTS = {
-  meeting: `You are a meeting summarizer for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
+
+  meeting: `You are a meeting notes assistant for Indian businesses.
+The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
-Extract:
-1) One-line summary
-2) Key decisions made
-3) Action items with owners and deadlines
-4) Next steps / follow-ups
-Be concise and professional.`,
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the meeting",
+  "key_decisions": ["Decision 1", "Decision 2"],
+  "action_items": [
+    { "task": "Task description", "owner": "Person name or Unassigned", "deadline": "Date or Not mentioned" }
+  ],
+  "next_meeting_date": "Date and time or Not mentioned"
+}
+
+Rules:
+- key_decisions: list every resolved outcome or agreement. If none, return []
+- action_items: every task with a doer. If no owner spoken, use "Unassigned"
+- next_meeting_date: any follow-up meeting reference. If none, return "Not mentioned"
+- Return ONLY the JSON object — nothing else`,
 
   sales: `You are a sales call analyst for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
+The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
-Extract:
-1) One-line summary of the call
-2) Customer pain points identified
-3) Products/services discussed
-4) Objections raised and how they were handled
-5) Deal stage and next steps
-6) Follow-up actions required
-Be concise and focused on sales insights.`,
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the call",
+  "lead_name": "Full name and company of the prospect, or Not mentioned",
+  "requirements": ["Requirement or pain point 1", "Requirement 2"],
+  "objections": ["Objection 1", "Objection 2"],
+  "next_steps": ["Next step 1", "Next step 2"]
+}
+
+Rules:
+- lead_name: extract from introduction or how they are addressed
+- requirements: pain points, needs, goals expressed by the prospect
+- objections: pricing concerns, competitor mentions, timing issues, hesitations
+- next_steps: agreed follow-up actions — demo, proposal, callback date
+- If a field has no data, return []
+- Return ONLY the JSON object — nothing else`,
 
   lecture: `You are an academic notes assistant.
-The transcript may contain Roman script Hindi, Marathi or English.
+The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
-Extract:
-1) One-line summary of the lecture topic
-2) Key concepts and definitions covered
-3) Important examples or case studies mentioned
-4) Topics the student should review or research further
-5) Any assignments or deadlines mentioned
-Be thorough and academic in tone.`,
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line overview of the lecture topic",
+  "key_concepts": ["Concept 1", "Concept 2"],
+  "definitions": [
+    { "term": "Term", "definition": "Definition as explained in lecture" }
+  ],
+  "study_questions": ["Question 1?", "Question 2?", "Question 3?"]
+}
+
+Rules:
+- key_concepts: core ideas explained by the lecturer, 3-8 items
+- definitions: only terms explicitly defined during the lecture
+- study_questions: generate 3-5 revision questions a student should be able to answer
+- If a field has no data, return []
+- Return ONLY the JSON object — nothing else`,
+
+  doctor: `You are a medical notes assistant.
+The transcript may contain Roman-script Hindi, Marathi, or English.
+Always respond in clear English only.
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the consultation",
+  "patient_complaint": "Chief complaint and symptoms as described, with duration if mentioned",
+  "diagnosis": "Condition identified or suspected by the doctor, or Not mentioned",
+  "prescription": [
+    { "medicine": "Medicine name", "dosage": "Dosage", "frequency": "Frequency", "duration": "Duration" }
+  ],
+  "followup_date": "Next appointment or re-visit instruction, or Not mentioned"
+}
+
+Rules:
+- patient_complaint: capture all symptoms, their severity, and how long they have been present
+- diagnosis: exact condition named by doctor, or "Under investigation" if tests ordered
+- prescription: each medicine as a separate object; use "Not specified" for missing fields
+- followup_date: any mention of coming back, next checkup, or test date
+- Return ONLY the JSON object — nothing else`,
+
+  legal: `You are a legal notes assistant for Indian law practices.
+The transcript may contain Roman-script Hindi, Marathi, or English.
+Always respond in clear English only.
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the legal matter discussed",
+  "client_details": "Client name, case reference, matter type — or Not mentioned",
+  "case_summary": "Core legal matter, current status, and key facts discussed",
+  "action_items": [
+    { "task": "Task description", "owner": "Lawyer or Client", "deadline": "Date or Not mentioned" }
+  ],
+  "next_hearing_date": "Scheduled hearing, court date, or filing deadline — or Not mentioned"
+}
+
+Rules:
+- client_details: extract name from how they are addressed or introduced
+- case_summary: 2-3 sentences covering the legal issue, jurisdiction if mentioned, current stage
+- action_items: documents to gather, filings due, calls to make
+- next_hearing_date: any court date, deadline, or scheduled appointment
+- Return ONLY the JSON object — nothing else`,
 
   interview: `You are an interview assessment assistant for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
+The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
-Extract:
-1) One-line summary of the interview
-2) Role being interviewed for (if mentioned)
-3) Key strengths demonstrated by the candidate
-4) Areas of concern or red flags
-5) Notable answers or quotes
-6) Recommended next steps (proceed/hold/reject)
-Be objective and professional.`,
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 
-  default: `You are a meeting summarizer for Indian businesses.
-The transcript may contain Roman script Hindi, Marathi or English.
+Required format:
+{
+  "summary": "One-line summary of the interview",
+  "candidate_name": "Candidate's full name, or Not mentioned",
+  "key_answers": ["Notable answer or example given by candidate 1", "Notable answer 2"],
+  "evaluation": {
+    "strengths": ["Strength 1", "Strength 2"],
+    "concerns": ["Concern or red flag 1"]
+  },
+  "decision": "Recommended outcome: Shortlist / Reject / Hold / Move to next round — with one-line reason"
+}
+
+Rules:
+- candidate_name: from introduction or how interviewer addresses them
+- key_answers: specific examples, stories, or responses that stand out (positive or negative)
+- evaluation.strengths: demonstrated skills, cultural fit signals, strong moments
+- evaluation.concerns: hesitations, gaps, red flags observed
+- decision: clear recommendation with brief reasoning
+- If a field has no data, return []
+- Return ONLY the JSON object — nothing else`,
+
+  default: `You are a notes assistant for Indian businesses.
+The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
-Extract:
-1) One-line summary
-2) Key points discussed
-3) Action items (if any)
-4) Decisions made (if any)
-Be concise and professional.`,
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the recording",
+  "key_points": ["Key point 1", "Key point 2"],
+  "action_items": [
+    { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
+  ],
+  "decisions": ["Decision 1"]
+}
+
+Rules:
+- key_points: 3-6 most important things discussed
+- action_items: any tasks or follow-ups mentioned; return [] if none
+- decisions: any outcomes agreed upon; return [] if none
+- Return ONLY the JSON object — nothing else`,
 };
-// ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
   res.send('VoxNote Server is LIVE 🎙');
@@ -131,12 +235,11 @@ app.get('/realtime-token', async (req, res) => {
   }
 });
 
-// ─── Summarize route (template-aware) ──────────────────────── ✅ UPDATED
+// ─── Summarize route (template-aware, structured JSON) ───────────────────────
 app.post('/summarize', async (req, res) => {
   const { transcript, mode } = req.body;
   if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
 
-  // Pick the right prompt based on mode/template
   const systemPrompt = TEMPLATE_PROMPTS[mode] || TEMPLATE_PROMPTS.default;
   console.log('Summarizing with mode:', mode || 'default');
 
@@ -145,16 +248,33 @@ app.post('/summarize', async (req, res) => {
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user',   content: 'Summarize this transcript:\n\n' + transcript }
+        { role: 'user',   content: 'Extract structured notes from this transcript:\n\n' + transcript }
       ],
-      max_tokens: 600,
+      max_tokens: 1000,
     });
-    res.json({ success: true, summary: completion.choices[0].message.content });
+
+    const raw   = completion.choices[0].message.content.trim();
+    const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(clean);
+    } catch {
+      console.warn('/summarize: returning raw text (non-JSON response)');
+    }
+
+    res.json({
+      success:    true,
+      summary:    clean,   // store this string in Supabase
+      structured: parsed,  // parsed object for frontend direct use
+    });
+
   } catch (err) {
     console.error('Summary error:', err);
     res.status(500).json({ error: 'Summary failed: ' + err.message });
   }
 });
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Chat route ───
 app.post('/chat', async (req, res) => {
@@ -321,13 +441,134 @@ app.get('/share/:token', async (req, res) => {
     const duration = data.duration ? Math.round(data.duration / 60) + ' min' : 'N/A';
     const words    = data.word_count || 0;
 
+    // ─── Parse structured summary if JSON ───
     let summaryHTML = '';
     if (data.auto_summary) {
-      summaryHTML = `
-        <div class="section">
-          <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
-          <div style="background:#F0FAF4;padding:16px;border-radius:8px;font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">${data.auto_summary}</div>
-        </div>`;
+      let structuredSummary = null;
+      try {
+        const clean = data.auto_summary.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+        structuredSummary = JSON.parse(clean);
+      } catch { /* plain text summary */ }
+
+      if (structuredSummary) {
+        const mode = data.mode || 'default';
+        const TEMPLATE_LABELS = {
+          meeting:   '🤝 Meeting Notes',
+          sales:     '📞 Sales Call',
+          lecture:   '🎓 Lecture Notes',
+          doctor:    '🏥 Doctor Notes',
+          legal:     '⚖️ Legal Notes',
+          interview: '👤 Interview Notes',
+          default:   '📝 Notes',
+        };
+        let fieldsHTML = '';
+
+        if (structuredSummary.summary) {
+          fieldsHTML += `<div style="font-style:italic;color:#555;margin-bottom:12px;font-size:14px;">${structuredSummary.summary}</div>`;
+        }
+        // Meeting
+        if (structuredSummary.key_decisions?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#1A56A0;margin:10px 0 6px;">✅ Key Decisions</div>`;
+          fieldsHTML += structuredSummary.key_decisions.map(d => `<div style="padding:4px 0 4px 12px;border-left:3px solid #1A56A0;margin-bottom:4px;font-size:13px;">${d}</div>`).join('');
+        }
+        if (structuredSummary.next_meeting_date && structuredSummary.next_meeting_date !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-top:10px;padding:8px 12px;background:#EFF6FF;border-radius:8px;font-size:13px;"><strong>📅 Next Meeting:</strong> ${structuredSummary.next_meeting_date}</div>`;
+        }
+        // Sales
+        if (structuredSummary.lead_name && structuredSummary.lead_name !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-bottom:8px;padding:8px 12px;background:#ECFDF5;border-radius:8px;font-size:13px;"><strong>🏢 Lead:</strong> ${structuredSummary.lead_name}</div>`;
+        }
+        if (structuredSummary.requirements?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#059669;margin:10px 0 6px;">🎯 Requirements</div>`;
+          fieldsHTML += structuredSummary.requirements.map(r => `<div style="padding:4px 0 4px 12px;border-left:3px solid #059669;margin-bottom:4px;font-size:13px;">${r}</div>`).join('');
+        }
+        if (structuredSummary.objections?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#D97706;margin:10px 0 6px;">⚠️ Objections</div>`;
+          fieldsHTML += structuredSummary.objections.map(o => `<div style="padding:4px 0 4px 12px;border-left:3px solid #D97706;margin-bottom:4px;font-size:13px;">${o}</div>`).join('');
+        }
+        if (structuredSummary.next_steps?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#059669;margin:10px 0 6px;">🚀 Next Steps</div>`;
+          fieldsHTML += structuredSummary.next_steps.map(s => `<div style="padding:4px 0 4px 12px;border-left:3px solid #059669;margin-bottom:4px;font-size:13px;">${s}</div>`).join('');
+        }
+        // Lecture
+        if (structuredSummary.key_concepts?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#7C3AED;margin:10px 0 6px;">💡 Key Concepts</div>`;
+          fieldsHTML += structuredSummary.key_concepts.map(c => `<div style="padding:4px 0 4px 12px;border-left:3px solid #7C3AED;margin-bottom:4px;font-size:13px;">${c}</div>`).join('');
+        }
+        if (structuredSummary.definitions?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#7C3AED;margin:10px 0 6px;">📖 Definitions</div>`;
+          fieldsHTML += structuredSummary.definitions.map(d => `<div style="padding:8px 12px;background:#F5F3FF;border-radius:6px;margin-bottom:6px;font-size:13px;"><strong>${d.term}:</strong> ${d.definition}</div>`).join('');
+        }
+        if (structuredSummary.study_questions?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#7C3AED;margin:10px 0 6px;">❓ Study Questions</div>`;
+          fieldsHTML += structuredSummary.study_questions.map((q, i) => `<div style="padding:6px 12px;margin-bottom:4px;font-size:13px;"><strong>Q${i+1}:</strong> ${q}</div>`).join('');
+        }
+        // Doctor
+        if (structuredSummary.patient_complaint) {
+          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FEF2F2;border-radius:8px;font-size:13px;"><strong>🩺 Complaint:</strong> ${structuredSummary.patient_complaint}</div>`;
+        }
+        if (structuredSummary.diagnosis && structuredSummary.diagnosis !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FEF2F2;border-radius:8px;font-size:13px;"><strong>🔬 Diagnosis:</strong> ${structuredSummary.diagnosis}</div>`;
+        }
+        if (structuredSummary.prescription?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#DC2626;margin:10px 0 6px;">💊 Prescription</div>`;
+          fieldsHTML += structuredSummary.prescription.map(p => `<div style="padding:8px 12px;background:#FFF5F5;border-radius:6px;margin-bottom:6px;font-size:13px;"><strong>${p.medicine}</strong> — ${p.dosage}, ${p.frequency}, ${p.duration}</div>`).join('');
+        }
+        if (structuredSummary.followup_date && structuredSummary.followup_date !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-top:10px;padding:8px 12px;background:#FEF2F2;border-radius:8px;font-size:13px;"><strong>📅 Follow-up:</strong> ${structuredSummary.followup_date}</div>`;
+        }
+        // Legal
+        if (structuredSummary.client_details && structuredSummary.client_details !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FFFBEB;border-radius:8px;font-size:13px;"><strong>👤 Client:</strong> ${structuredSummary.client_details}</div>`;
+        }
+        if (structuredSummary.case_summary) {
+          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FFFBEB;border-radius:8px;font-size:13px;"><strong>📄 Case:</strong> ${structuredSummary.case_summary}</div>`;
+        }
+        if (structuredSummary.next_hearing_date && structuredSummary.next_hearing_date !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-top:10px;padding:8px 12px;background:#FFFBEB;border-radius:8px;font-size:13px;"><strong>⚖️ Next Hearing:</strong> ${structuredSummary.next_hearing_date}</div>`;
+        }
+        // Interview
+        if (structuredSummary.candidate_name && structuredSummary.candidate_name !== 'Not mentioned') {
+          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#F0F9FF;border-radius:8px;font-size:13px;"><strong>👤 Candidate:</strong> ${structuredSummary.candidate_name}</div>`;
+        }
+        if (structuredSummary.key_answers?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#0369A1;margin:10px 0 6px;">💬 Key Answers</div>`;
+          fieldsHTML += structuredSummary.key_answers.map(a => `<div style="padding:4px 0 4px 12px;border-left:3px solid #0369A1;margin-bottom:4px;font-size:13px;">${a}</div>`).join('');
+        }
+        if (structuredSummary.evaluation?.strengths?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#059669;margin:10px 0 6px;">✅ Strengths</div>`;
+          fieldsHTML += structuredSummary.evaluation.strengths.map(s => `<div style="padding:4px 0 4px 12px;border-left:3px solid #059669;margin-bottom:4px;font-size:13px;">${s}</div>`).join('');
+        }
+        if (structuredSummary.evaluation?.concerns?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#DC2626;margin:10px 0 6px;">⚠️ Concerns</div>`;
+          fieldsHTML += structuredSummary.evaluation.concerns.map(c => `<div style="padding:4px 0 4px 12px;border-left:3px solid #DC2626;margin-bottom:4px;font-size:13px;">${c}</div>`).join('');
+        }
+        if (structuredSummary.decision) {
+          fieldsHTML += `<div style="margin-top:10px;padding:10px 12px;background:#F0F9FF;border-radius:8px;font-size:13px;"><strong>🎯 Decision:</strong> ${structuredSummary.decision}</div>`;
+        }
+        // Default
+        if (structuredSummary.key_points?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#374151;margin:10px 0 6px;">💡 Key Points</div>`;
+          fieldsHTML += structuredSummary.key_points.map(p => `<div style="padding:4px 0 4px 12px;border-left:3px solid #374151;margin-bottom:4px;font-size:13px;">${p}</div>`).join('');
+        }
+        if (structuredSummary.decisions?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#374151;margin:10px 0 6px;">✅ Decisions</div>`;
+          fieldsHTML += structuredSummary.decisions.map(d => `<div style="padding:4px 0 4px 12px;border-left:3px solid #374151;margin-bottom:4px;font-size:13px;">${d}</div>`).join('');
+        }
+
+        summaryHTML = `
+          <div class="section">
+            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 ${TEMPLATE_LABELS[mode] || 'AI Notes'}</div>
+            <div style="background:#F0FAF4;padding:16px;border-radius:8px;">${fieldsHTML}</div>
+          </div>`;
+      } else {
+        // Plain text fallback
+        summaryHTML = `
+          <div class="section">
+            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
+            <div style="background:#F0FAF4;padding:16px;border-radius:8px;font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">${data.auto_summary}</div>
+          </div>`;
+      }
     }
 
     let actionHTML = '';
@@ -435,7 +676,7 @@ app.get('/share/:token', async (req, res) => {
   }
 });
 
-// ─── HELPERS ───
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 
 const translateToEnglish = async (text) => {
   try {
@@ -467,16 +708,26 @@ Rules:
 const generateSummary = async (text, mode) => {
   try {
     const truncated    = text.length > 8000 ? text.substring(0, 8000) + '...' : text;
-    const systemPrompt = TEMPLATE_PROMPTS[mode] || TEMPLATE_PROMPTS.default; // ✅ template-aware
+    const systemPrompt = TEMPLATE_PROMPTS[mode] || TEMPLATE_PROMPTS.default;
     const completion   = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user',   content: 'Summarize this:\n\n' + truncated }
+        { role: 'user',   content: 'Extract structured notes from this transcript:\n\n' + truncated }
       ],
-      max_tokens: 800,
+      max_tokens: 1000,
     });
-    return completion.choices[0].message.content;
+
+    const raw   = completion.choices[0].message.content.trim();
+    const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+
+    try {
+      JSON.parse(clean);
+      return clean; // valid JSON string — store in Supabase
+    } catch {
+      console.warn('generateSummary: GPT returned non-JSON, storing as plain text');
+      return raw;
+    }
   } catch (err) {
     console.error('Summary generation error:', err.message);
     return null;
@@ -590,7 +841,7 @@ Rules:
   }
 };
 
-// ─── Helper: Process completed transcript ───
+// ─── Helper: Process completed transcript ────────────────────────────────────
 const processTranscript = async (transcript, mode) => {
   const rawText      = transcript.text || '';
   const detectedLang = transcript.language_code || 'en';
@@ -632,7 +883,7 @@ const processTranscript = async (transcript, mode) => {
 
   console.log('Generating summary...');
   const summaryInput = englishText || rawText;
-  const autoSummary  = summaryInput ? await generateSummary(summaryInput, mode) : null; // ✅ pass mode
+  const autoSummary  = summaryInput ? await generateSummary(summaryInput, mode) : null;
 
   console.log('Extracting action items...');
   const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
@@ -670,7 +921,7 @@ const processTranscript = async (transcript, mode) => {
   };
 };
 
-// ─── ROUTE 1: Start transcription job ───
+// ─── ROUTE 1: Start transcription job ────────────────────────────────────────
 app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
@@ -713,7 +964,7 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ─── WEBHOOK: AssemblyAI calls this when done ───
+// ─── WEBHOOK: AssemblyAI calls this when done ────────────────────────────────
 app.post('/webhook/assemblyai', async (req, res) => {
   try {
     const { transcript_id, status } = req.body;
@@ -762,7 +1013,7 @@ app.post('/webhook/assemblyai', async (req, res) => {
   }
 });
 
-// ─── ROUTE 2: Poll job status ───
+// ─── ROUTE 2: Poll job status ─────────────────────────────────────────────────
 app.get('/transcribe-status/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
@@ -826,7 +1077,7 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
   }
 });
 
-// ─── ROUTE 3: Old sync route ───
+// ─── ROUTE 3: Old sync route ──────────────────────────────────────────────────
 app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {

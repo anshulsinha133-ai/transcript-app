@@ -1,0 +1,474 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// FILE: src/components/TemplateNotes.js
+// Drop this component into your project and use it in TranscriptScreen.js
+// Usage: <TemplateNotes summary={transcript.auto_summary} mode={transcript.mode} />
+// ─────────────────────────────────────────────────────────────────────────────
+
+import React, { useMemo } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView
+} from 'react-native';
+
+// ─── Template config: labels, icons, accent colors ───────────────────────────
+const TEMPLATE_CONFIG = {
+  meeting: {
+    label:  'Meeting Notes',
+    icon:   '🤝',
+    color:  '#1A56DB',
+    bg:     '#EFF6FF',
+    border: '#BFDBFE',
+  },
+  sales: {
+    label:  'Sales Call',
+    icon:   '📞',
+    color:  '#059669',
+    bg:     '#ECFDF5',
+    border: '#A7F3D0',
+  },
+  lecture: {
+    label:  'Lecture Notes',
+    icon:   '🎓',
+    color:  '#7C3AED',
+    bg:     '#F5F3FF',
+    border: '#DDD6FE',
+  },
+  doctor: {
+    label:  'Doctor Notes',
+    icon:   '🏥',
+    color:  '#DC2626',
+    bg:     '#FEF2F2',
+    border: '#FECACA',
+  },
+  legal: {
+    label:  'Legal Notes',
+    icon:   '⚖️',
+    color:  '#92400E',
+    bg:     '#FFFBEB',
+    border: '#FDE68A',
+  },
+  interview: {
+    label:  'Interview Notes',
+    icon:   '👤',
+    color:  '#0369A1',
+    bg:     '#F0F9FF',
+    border: '#BAE6FD',
+  },
+  default: {
+    label:  'Notes',
+    icon:   '📝',
+    color:  '#374151',
+    bg:     '#F9FAFB',
+    border: '#E5E7EB',
+  },
+};
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const SectionHeader = ({ icon, title, color }) => (
+  <View style={[styles.sectionHeader, { borderLeftColor: color }]}>
+    <Text style={styles.sectionIcon}>{icon}</Text>
+    <Text style={[styles.sectionTitle, { color }]}>{title}</Text>
+  </View>
+);
+
+const Chip = ({ text, color, bg }) => (
+  <View style={[styles.chip, { backgroundColor: bg, borderColor: color }]}>
+    <Text style={[styles.chipText, { color }]}>{text}</Text>
+  </View>
+);
+
+const BulletItem = ({ text, color }) => (
+  <View style={styles.bulletRow}>
+    <View style={[styles.bullet, { backgroundColor: color }]} />
+    <Text style={styles.bulletText}>{text}</Text>
+  </View>
+);
+
+const ActionRow = ({ item, index, color }) => (
+  <View style={[styles.actionRow, index % 2 === 0 ? styles.actionRowEven : styles.actionRowOdd]}>
+    <View style={[styles.actionIndex, { backgroundColor: color }]}>
+      <Text style={styles.actionIndexText}>{index + 1}</Text>
+    </View>
+    <View style={styles.actionContent}>
+      <Text style={styles.actionTask}>{item.task}</Text>
+      <View style={styles.actionMeta}>
+        {item.owner && item.owner !== 'Unassigned' && (
+          <Text style={styles.actionOwner}>👤 {item.owner}</Text>
+        )}
+        {item.deadline && item.deadline !== 'Not mentioned' && (
+          <Text style={styles.actionDeadline}>📅 {item.deadline}</Text>
+        )}
+      </View>
+    </View>
+  </View>
+);
+
+const InfoRow = ({ label, value, color }) => {
+  if (!value || value === 'Not mentioned') return null;
+  return (
+    <View style={styles.infoRow}>
+      <Text style={[styles.infoLabel, { color }]}>{label}</Text>
+      <Text style={styles.infoValue}>{value}</Text>
+    </View>
+  );
+};
+
+// ─── Template renderers ────────────────────────────────────────────────────────
+
+const MeetingNotes = ({ data, cfg }) => (
+  <View>
+    {data.key_decisions?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="✅" title="Key Decisions" color={cfg.color} />
+        {data.key_decisions.map((d, i) => (
+          <BulletItem key={i} text={d} color={cfg.color} />
+        ))}
+      </View>
+    )}
+    {data.action_items?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="📋" title="Action Items" color={cfg.color} />
+        {data.action_items.map((item, i) => (
+          <ActionRow key={i} item={item} index={i} color={cfg.color} />
+        ))}
+      </View>
+    )}
+    {data.next_meeting_date && data.next_meeting_date !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>📅 Next Meeting</Text>
+        <Text style={styles.highlightValue}>{data.next_meeting_date}</Text>
+      </View>
+    )}
+  </View>
+);
+
+const SalesNotes = ({ data, cfg }) => (
+  <View>
+    {data.lead_name && data.lead_name !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>🏢 Lead</Text>
+        <Text style={styles.highlightValue}>{data.lead_name}</Text>
+      </View>
+    )}
+    {data.requirements?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="🎯" title="Requirements" color={cfg.color} />
+        {data.requirements.map((r, i) => <BulletItem key={i} text={r} color={cfg.color} />)}
+      </View>
+    )}
+    {data.objections?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="⚠️" title="Objections" color="#D97706" />
+        {data.objections.map((o, i) => <BulletItem key={i} text={o} color="#D97706" />)}
+      </View>
+    )}
+    {data.next_steps?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="🚀" title="Next Steps" color={cfg.color} />
+        {data.next_steps.map((s, i) => <BulletItem key={i} text={s} color={cfg.color} />)}
+      </View>
+    )}
+  </View>
+);
+
+const LectureNotes = ({ data, cfg }) => (
+  <View>
+    {data.key_concepts?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="💡" title="Key Concepts" color={cfg.color} />
+        {data.key_concepts.map((c, i) => <BulletItem key={i} text={c} color={cfg.color} />)}
+      </View>
+    )}
+    {data.definitions?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="📖" title="Definitions" color={cfg.color} />
+        {data.definitions.map((d, i) => (
+          <View key={i} style={[styles.definitionBox, { borderLeftColor: cfg.color }]}>
+            <Text style={[styles.defTerm, { color: cfg.color }]}>{d.term}</Text>
+            <Text style={styles.defMeaning}>{d.definition}</Text>
+          </View>
+        ))}
+      </View>
+    )}
+    {data.study_questions?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="❓" title="Study Questions" color={cfg.color} />
+        {data.study_questions.map((q, i) => (
+          <View key={i} style={styles.questionRow}>
+            <Text style={[styles.questionNum, { color: cfg.color }]}>Q{i + 1}</Text>
+            <Text style={styles.questionText}>{q}</Text>
+          </View>
+        ))}
+      </View>
+    )}
+  </View>
+);
+
+const DoctorNotes = ({ data, cfg }) => (
+  <View>
+    {data.patient_complaint && (
+      <View style={styles.section}>
+        <SectionHeader icon="🩺" title="Patient Complaint" color={cfg.color} />
+        <View style={[styles.plainBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+          <Text style={styles.plainText}>{data.patient_complaint}</Text>
+        </View>
+      </View>
+    )}
+    {data.diagnosis && data.diagnosis !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>🔬 Diagnosis</Text>
+        <Text style={styles.highlightValue}>{data.diagnosis}</Text>
+      </View>
+    )}
+    {data.prescription?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="💊" title="Prescription" color={cfg.color} />
+        {data.prescription.map((p, i) => (
+          <View key={i} style={[styles.prescriptionRow, i % 2 === 0 ? styles.actionRowEven : styles.actionRowOdd]}>
+            <Text style={[styles.medicineName, { color: cfg.color }]}>{p.medicine}</Text>
+            <View style={styles.medicineDetails}>
+              {p.dosage     !== 'Not specified' && <Text style={styles.medicineDetail}>💊 {p.dosage}</Text>}
+              {p.frequency  !== 'Not specified' && <Text style={styles.medicineDetail}>🔁 {p.frequency}</Text>}
+              {p.duration   !== 'Not specified' && <Text style={styles.medicineDetail}>⏱ {p.duration}</Text>}
+            </View>
+          </View>
+        ))}
+      </View>
+    )}
+    {data.followup_date && data.followup_date !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>📅 Follow-up</Text>
+        <Text style={styles.highlightValue}>{data.followup_date}</Text>
+      </View>
+    )}
+  </View>
+);
+
+const LegalNotes = ({ data, cfg }) => (
+  <View>
+    {data.client_details && data.client_details !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>👤 Client</Text>
+        <Text style={styles.highlightValue}>{data.client_details}</Text>
+      </View>
+    )}
+    {data.case_summary && (
+      <View style={styles.section}>
+        <SectionHeader icon="📄" title="Case Summary" color={cfg.color} />
+        <View style={[styles.plainBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+          <Text style={styles.plainText}>{data.case_summary}</Text>
+        </View>
+      </View>
+    )}
+    {data.action_items?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="📋" title="Action Items" color={cfg.color} />
+        {data.action_items.map((item, i) => (
+          <ActionRow key={i} item={item} index={i} color={cfg.color} />
+        ))}
+      </View>
+    )}
+    {data.next_hearing_date && data.next_hearing_date !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>⚖️ Next Hearing</Text>
+        <Text style={styles.highlightValue}>{data.next_hearing_date}</Text>
+      </View>
+    )}
+  </View>
+);
+
+const InterviewNotes = ({ data, cfg }) => (
+  <View>
+    {data.candidate_name && data.candidate_name !== 'Not mentioned' && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>👤 Candidate</Text>
+        <Text style={styles.highlightValue}>{data.candidate_name}</Text>
+      </View>
+    )}
+    {data.key_answers?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="💬" title="Key Answers" color={cfg.color} />
+        {data.key_answers.map((a, i) => <BulletItem key={i} text={a} color={cfg.color} />)}
+      </View>
+    )}
+    {(data.evaluation?.strengths?.length > 0 || data.evaluation?.concerns?.length > 0) && (
+      <View style={styles.section}>
+        <SectionHeader icon="📊" title="Evaluation" color={cfg.color} />
+        {data.evaluation?.strengths?.length > 0 && (
+          <View style={styles.evalBlock}>
+            <Text style={styles.evalSubLabel}>✅ Strengths</Text>
+            {data.evaluation.strengths.map((s, i) => (
+              <BulletItem key={i} text={s} color="#059669" />
+            ))}
+          </View>
+        )}
+        {data.evaluation?.concerns?.length > 0 && (
+          <View style={[styles.evalBlock, { marginTop: 8 }]}>
+            <Text style={styles.evalSubLabel}>⚠️ Concerns</Text>
+            {data.evaluation.concerns.map((c, i) => (
+              <BulletItem key={i} text={c} color="#DC2626" />
+            ))}
+          </View>
+        )}
+      </View>
+    )}
+    {data.decision && (
+      <View style={[styles.highlightBox, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={[styles.highlightLabel, { color: cfg.color }]}>🎯 Decision</Text>
+        <Text style={styles.highlightValue}>{data.decision}</Text>
+      </View>
+    )}
+  </View>
+);
+
+const DefaultNotes = ({ data, cfg }) => (
+  <View>
+    {data.key_points?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="💡" title="Key Points" color={cfg.color} />
+        {data.key_points.map((p, i) => <BulletItem key={i} text={p} color={cfg.color} />)}
+      </View>
+    )}
+    {data.action_items?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="📋" title="Action Items" color={cfg.color} />
+        {data.action_items.map((item, i) => (
+          <ActionRow key={i} item={item} index={i} color={cfg.color} />
+        ))}
+      </View>
+    )}
+    {data.decisions?.length > 0 && (
+      <View style={styles.section}>
+        <SectionHeader icon="✅" title="Decisions" color={cfg.color} />
+        {data.decisions.map((d, i) => <BulletItem key={i} text={d} color={cfg.color} />)}
+      </View>
+    )}
+  </View>
+);
+
+// ─── Main TemplateNotes component ────────────────────────────────────────────
+const TemplateNotes = ({ summary, mode }) => {
+  const cfg = TEMPLATE_CONFIG[mode] || TEMPLATE_CONFIG.default;
+
+  // Parse the summary JSON string (stored in Supabase as string)
+  const data = useMemo(() => {
+    if (!summary) return null;
+    if (typeof summary === 'object') return summary; // already parsed
+    try {
+      const clean = summary
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+      return JSON.parse(clean);
+    } catch {
+      return null; // non-JSON (old-style plain text) — caller handles fallback
+    }
+  }, [summary]);
+
+  if (!data) return null; // let TranscriptScreen render plain text fallback
+
+  return (
+    <View style={styles.container}>
+      {/* Template badge */}
+      <View style={[styles.badge, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
+        <Text style={styles.badgeIcon}>{cfg.icon}</Text>
+        <Text style={[styles.badgeLabel, { color: cfg.color }]}>{cfg.label}</Text>
+      </View>
+
+      {/* One-line summary */}
+      {data.summary && (
+        <View style={[styles.summaryBox, { borderLeftColor: cfg.color }]}>
+          <Text style={styles.summaryText}>{data.summary}</Text>
+        </View>
+      )}
+
+      {/* Template-specific fields */}
+      {mode === 'meeting'   && <MeetingNotes   data={data} cfg={cfg} />}
+      {mode === 'sales'     && <SalesNotes     data={data} cfg={cfg} />}
+      {mode === 'lecture'   && <LectureNotes   data={data} cfg={cfg} />}
+      {mode === 'doctor'    && <DoctorNotes    data={data} cfg={cfg} />}
+      {mode === 'legal'     && <LegalNotes     data={data} cfg={cfg} />}
+      {mode === 'interview' && <InterviewNotes data={data} cfg={cfg} />}
+      {(!mode || mode === 'en' || mode === 'hi' || mode === 'mr') && (
+        <DefaultNotes data={data} cfg={cfg} />
+      )}
+    </View>
+  );
+};
+
+export default TemplateNotes;
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  container:        { marginTop: 8 },
+  badge:            { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start',
+                      paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+                      borderWidth: 1, marginBottom: 14 },
+  badgeIcon:        { fontSize: 14, marginRight: 6 },
+  badgeLabel:       { fontSize: 13, fontWeight: '700' },
+  summaryBox:       { borderLeftWidth: 3, paddingLeft: 12, marginBottom: 18,
+                      backgroundColor: '#FAFAFA', paddingVertical: 10,
+                      paddingRight: 12, borderRadius: 4 },
+  summaryText:      { fontSize: 14, color: '#374151', lineHeight: 22, fontStyle: 'italic' },
+
+  section:          { marginBottom: 18 },
+  sectionHeader:    { flexDirection: 'row', alignItems: 'center',
+                      borderLeftWidth: 3, paddingLeft: 10, marginBottom: 10 },
+  sectionIcon:      { fontSize: 14, marginRight: 6 },
+  sectionTitle:     { fontSize: 14, fontWeight: '700' },
+
+  chip:             { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
+                      borderWidth: 1, marginRight: 8, marginBottom: 6 },
+  chipText:         { fontSize: 12, fontWeight: '600' },
+
+  bulletRow:        { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 7 },
+  bullet:           { width: 6, height: 6, borderRadius: 3, marginTop: 7, marginRight: 10 },
+  bulletText:       { flex: 1, fontSize: 14, color: '#374151', lineHeight: 21 },
+
+  actionRow:        { flexDirection: 'row', alignItems: 'flex-start',
+                      paddingVertical: 10, paddingHorizontal: 12,
+                      borderRadius: 8, marginBottom: 4 },
+  actionRowEven:    { backgroundColor: '#F8FAFC' },
+  actionRowOdd:     { backgroundColor: '#F1F5F9' },
+  actionIndex:      { width: 22, height: 22, borderRadius: 11,
+                      alignItems: 'center', justifyContent: 'center', marginRight: 10, marginTop: 1 },
+  actionIndexText:  { color: '#fff', fontSize: 11, fontWeight: '700' },
+  actionContent:    { flex: 1 },
+  actionTask:       { fontSize: 14, color: '#1E293B', fontWeight: '600', marginBottom: 4 },
+  actionMeta:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  actionOwner:      { fontSize: 12, color: '#64748B' },
+  actionDeadline:   { fontSize: 12, color: '#64748B' },
+
+  highlightBox:     { borderWidth: 1, borderRadius: 10, padding: 14, marginBottom: 14 },
+  highlightLabel:   { fontSize: 11, fontWeight: '700', textTransform: 'uppercase',
+                      letterSpacing: 0.8, marginBottom: 4 },
+  highlightValue:   { fontSize: 15, color: '#1E293B', fontWeight: '500' },
+
+  plainBox:         { borderWidth: 1, borderRadius: 8, padding: 12 },
+  plainText:        { fontSize: 14, color: '#374151', lineHeight: 22 },
+
+  definitionBox:    { borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 8,
+                      marginBottom: 10, backgroundColor: '#F8FAFC', borderRadius: 4 },
+  defTerm:          { fontSize: 14, fontWeight: '700', marginBottom: 3 },
+  defMeaning:       { fontSize: 13, color: '#4B5563', lineHeight: 20 },
+
+  questionRow:      { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
+  questionNum:      { fontSize: 13, fontWeight: '700', width: 28, marginTop: 1 },
+  questionText:     { flex: 1, fontSize: 14, color: '#374151', lineHeight: 21 },
+
+  prescriptionRow:  { paddingVertical: 10, paddingHorizontal: 12,
+                      borderRadius: 8, marginBottom: 4 },
+  medicineName:     { fontSize: 14, fontWeight: '700', marginBottom: 4 },
+  medicineDetails:  { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  medicineDetail:   { fontSize: 12, color: '#4B5563' },
+
+  infoRow:          { flexDirection: 'row', marginBottom: 8 },
+  infoLabel:        { width: 100, fontSize: 12, fontWeight: '700',
+                      textTransform: 'uppercase', letterSpacing: 0.5 },
+  infoValue:        { flex: 1, fontSize: 14, color: '#374151' },
+
+  evalBlock:        { backgroundColor: '#F8FAFC', borderRadius: 8, padding: 10 },
+  evalSubLabel:     { fontSize: 12, fontWeight: '700', color: '#64748B',
+                      marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+});
