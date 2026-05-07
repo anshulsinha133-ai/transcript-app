@@ -1,65 +1,88 @@
 import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, Alert, Modal
+  SafeAreaView, ActivityIndicator, Alert, Modal, ScrollView
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { transcribeWithSpeakers } from '../services/api';
 import { saveTranscript, createTranscriptObj } from '../utils/storage';
 
-// ─── Recording Templates ───────────────────────────────────────────── ✅ NEW
+// ─── All 7 recording templates ────────────────────────────────────────────────
 const TEMPLATES = [
   {
     id:    'meeting',
-    icon:  '👥',
-    label: 'Meeting',
+    icon:  '🤝',
+    label: 'Meeting Notes',
     color: '#1A56A0',
     bg:    '#E8F0FC',
     hint:  'Decisions, action items, owners',
   },
   {
     id:    'sales',
-    icon:  '💰',
+    icon:  '📞',
     label: 'Sales Call',
-    color: '#C85A00',
-    bg:    '#FEF3E8',
-    hint:  'Pain points, next steps, deal stage',
+    color: '#059669',
+    bg:    '#ECFDF5',
+    hint:  'Lead, requirements, objections, next steps',
+  },
+  {
+    id:    'doctor',
+    icon:  '🏥',
+    label: 'Doctor Notes',
+    color: '#DC2626',
+    bg:    '#FEF2F2',
+    hint:  'Complaint, diagnosis, prescription, follow-up',
   },
   {
     id:    'lecture',
     icon:  '🎓',
-    label: 'Lecture',
-    color: '#1A7A4A',
-    bg:    '#E8F5EE',
-    hint:  'Key concepts, topics to review',
+    label: 'Lecture Notes',
+    color: '#7C3AED',
+    bg:    '#F5F3FF',
+    hint:  'Key concepts, definitions, study questions',
   },
   {
     id:    'interview',
-    icon:  '🧑‍💼',
-    label: 'Interview',
-    color: '#8B1AAF',
-    bg:    '#F3E8FE',
-    hint:  'Strengths, responses, red flags',
+    icon:  '👤',
+    label: 'Interview Notes',
+    color: '#0369A1',
+    bg:    '#F0F9FF',
+    hint:  'Candidate, answers, evaluation, decision',
+  },
+  {
+    id:    'legal',
+    icon:  '⚖️',
+    label: 'Legal Notes',
+    color: '#92400E',
+    bg:    '#FFFBEB',
+    hint:  'Client, case summary, actions, hearing date',
+  },
+  {
+    id:    'other',
+    icon:  '📝',
+    label: 'Other',
+    color: '#374151',
+    bg:    '#F9FAFB',
+    hint:  'General recording — auto summary',
   },
 ];
-// ──────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function UploadScreen({ navigation }) {
-  const [file,              setFile]              = useState(null);
-  const [status,            setStatus]            = useState('idle');
-  const [statusText,        setStatusText]        = useState('');
-  const [selectedTemplate,  setSelectedTemplate]  = useState(null); // ✅ NEW
-  const [showTemplates,     setShowTemplates]     = useState(false); // ✅ NEW
+  const [file,             setFile]             = useState(null);
+  const [status,           setStatus]           = useState('idle');
+  const [statusText,       setStatusText]       = useState('');
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [showTemplates,    setShowTemplates]    = useState(false);
 
   const pickFile = async () => {
     const result = await DocumentPicker.getDocumentAsync({
-      type: ['audio/mpeg','audio/wav','audio/m4a','audio/mp4','audio/*'],
+      type: ['audio/mpeg', 'audio/wav', 'audio/m4a', 'audio/mp4', 'audio/*'],
       copyToCacheDirectory: true,
     });
     if (!result.canceled) setFile(result.assets[0]);
   };
 
-  // ─── Show template picker before transcribing ─────────────── ✅ NEW
   const handleTranscribePress = () => {
     if (!file) return Alert.alert('No file selected', 'Please pick an audio file first');
     setShowTemplates(true);
@@ -70,7 +93,6 @@ export default function UploadScreen({ navigation }) {
     setShowTemplates(false);
     handleTranscribe(template);
   };
-  // ──────────────────────────────────────────────────────────────
 
   const handleTranscribe = async (template) => {
     if (!file) return;
@@ -81,14 +103,13 @@ export default function UploadScreen({ navigation }) {
       const result = await transcribeWithSpeakers(
         file.uri,
         (message, percent) => {
-          setStatusText(message + ' ' + percent + '%');
+          setStatusText(message + (percent ? ' ' + percent + '%' : ''));
         }
       );
 
       if (result.success) {
         const title = result.smartTitle || file.name;
-
-        const text = result.englishText ||
+        const text  = result.englishText ||
           result.text ||
           result.utterances?.map(u => u.englishText || u.text).join(' ') ||
           'Transcript saved';
@@ -103,17 +124,15 @@ export default function UploadScreen({ navigation }) {
           autoSummary:   result.autoSummary  || null,
           actionItems:   result.actionItems  || [],
           detectedLang:  result.detectedLang || 'en',
-          mode:          template?.id || (result.detectedLang !== 'en' ? 'auto' : 'en'), // ✅ NEW
-          templateLabel: template?.label || null, // ✅ NEW
+          mode:          template?.id || (result.detectedLang !== 'en' ? 'auto' : 'en'),
+          templateLabel: template?.label || null,
         };
 
         setStatusText('Saving transcript...');
-
         const saved = await saveTranscript(obj);
 
         if (saved && saved.success) {
           obj.id = saved.id;
-          console.log('Transcript saved with real UUID:', obj.id);
           setStatus('done');
           navigation.replace('Transcript', { transcript: obj });
         } else {
@@ -133,7 +152,7 @@ export default function UploadScreen({ navigation }) {
     }
   };
 
-  // ─── Template Picker Modal ─────────────────────────────────── ✅ NEW
+  // ─── Template Picker Modal ────────────────────────────────────────────────
   const renderTemplateModal = () => (
     <Modal
       visible={showTemplates}
@@ -143,40 +162,44 @@ export default function UploadScreen({ navigation }) {
       <View style={styles.modalOverlay}>
         <View style={styles.modalBox}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>🤖 Choose Recording Type</Text>
+            <Text style={styles.modalTitle}>🤖 What type of audio is this?</Text>
             <TouchableOpacity onPress={() => setShowTemplates(false)}>
               <Text style={styles.modalCloseX}>✕</Text>
             </TouchableOpacity>
           </View>
           <Text style={styles.modalSubtitle}>
-            This helps AI generate a smarter summary for you
+            Helps AI generate a smarter, structured summary
           </Text>
-          {TEMPLATES.map(t => (
-            <TouchableOpacity
-              key={t.id}
-              style={[styles.templateOption, { backgroundColor: t.bg, borderColor: t.color }]}
-              onPress={() => selectTemplateAndTranscribe(t)}
-              activeOpacity={0.75}>
-              <Text style={styles.templateIcon}>{t.icon}</Text>
-              <View style={styles.templateTextWrap}>
-                <Text style={[styles.templateLabel, { color: t.color }]}>{t.label}</Text>
-                <Text style={styles.templateHint}>{t.hint}</Text>
-              </View>
-              <Text style={[styles.templateArrow, { color: t.color }]}>›</Text>
-            </TouchableOpacity>
-          ))}
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {TEMPLATES.map(t => (
+              <TouchableOpacity
+                key={t.id}
+                style={[styles.templateOption, { backgroundColor: t.bg, borderColor: t.color }]}
+                onPress={() => selectTemplateAndTranscribe(t)}
+                activeOpacity={0.75}>
+                <Text style={styles.templateIcon}>{t.icon}</Text>
+                <View style={styles.templateTextWrap}>
+                  <Text style={[styles.templateLabel, { color: t.color }]}>{t.label}</Text>
+                  <Text style={styles.templateHint}>{t.hint}</Text>
+                </View>
+                <Text style={[styles.templateArrow, { color: t.color }]}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
       </View>
     </Modal>
   );
-  // ──────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={styles.container}>
       {renderTemplateModal()}
 
       <Text style={styles.title}>Upload Audio File</Text>
-      <Text style={styles.subtitle}>Supports MP3, WAV, M4A · Up to 500MB · 1 hour+</Text>
+      <Text style={styles.subtitle}>
+        Supports MP3, WAV, M4A · Up to 500MB · 1 hour+{'\n'}
+        Hindi, Marathi, Telugu, Tamil, English & more
+      </Text>
 
       <TouchableOpacity style={styles.pickBtn} onPress={pickFile}>
         <Text style={styles.pickIcon}>📁</Text>
@@ -211,7 +234,8 @@ const styles = StyleSheet.create({
   container:         { flex: 1, backgroundColor: '#F5F7FA', alignItems: 'center',
                        justifyContent: 'center', padding: 24 },
   title:             { fontSize: 22, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 8 },
-  subtitle:          { fontSize: 14, color: '#888', marginBottom: 32 },
+  subtitle:          { fontSize: 14, color: '#888', marginBottom: 32,
+                       textAlign: 'center', lineHeight: 22 },
   pickBtn:           { width: '100%', padding: 20, backgroundColor: '#fff', borderRadius: 12,
                        borderWidth: 2, borderColor: '#1A56A0', borderStyle: 'dashed',
                        alignItems: 'center' },
@@ -224,21 +248,20 @@ const styles = StyleSheet.create({
   transcribeBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   retryBtn:          { marginTop: 16, padding: 12 },
   retryText:         { color: '#B22222', fontSize: 14 },
-
-  // ✅ Template modal
-  modalOverlay:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalBox:        { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24,
-                     borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
-  modalHeader:     { flexDirection: 'row', justifyContent: 'space-between',
-                     alignItems: 'center', marginBottom: 6 },
-  modalTitle:      { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
-  modalCloseX:     { fontSize: 22, color: '#888', padding: 4 },
-  modalSubtitle:   { fontSize: 13, color: '#888', marginBottom: 20 },
-  templateOption:  { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
-                     borderRadius: 14, padding: 14, marginBottom: 10, gap: 12 },
-  templateIcon:    { fontSize: 26 },
-  templateTextWrap:{ flex: 1 },
-  templateLabel:   { fontSize: 15, fontWeight: '700', marginBottom: 2 },
-  templateHint:    { fontSize: 12, color: '#888' },
-  templateArrow:   { fontSize: 24, fontWeight: 'bold' },
+  modalOverlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalBox:          { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24,
+                       borderTopRightRadius: 24, padding: 24, paddingBottom: 40,
+                       maxHeight: '85%' },
+  modalHeader:       { flexDirection: 'row', justifyContent: 'space-between',
+                       alignItems: 'center', marginBottom: 6 },
+  modalTitle:        { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
+  modalCloseX:       { fontSize: 22, color: '#888', padding: 4 },
+  modalSubtitle:     { fontSize: 13, color: '#888', marginBottom: 16 },
+  templateOption:    { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
+                       borderRadius: 14, padding: 14, marginBottom: 10, gap: 12 },
+  templateIcon:      { fontSize: 24 },
+  templateTextWrap:  { flex: 1 },
+  templateLabel:     { fontSize: 15, fontWeight: '700', marginBottom: 2 },
+  templateHint:      { fontSize: 12, color: '#888' },
+  templateArrow:     { fontSize: 24, fontWeight: 'bold' },
 });

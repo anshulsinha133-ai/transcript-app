@@ -15,12 +15,11 @@ import HomeScreen       from './src/screens/HomeScreen';
 import RecordScreen     from './src/screens/RecordScreen';
 import UploadScreen     from './src/screens/UploadScreen';
 import TranscriptScreen from './src/screens/TranscriptScreen';
-import LiveScreen       from './src/screens/LiveScreen';
 import GlobalChatScreen from './src/screens/GlobalChatScreen';
 
 const Stack = createStackNavigator();
 
-// ─── Floating recording indicator ───
+// ─── Floating recording indicator ────────────────────────────────────────────
 function FloatingRecordingBar({ navigationRef }) {
   const { isRecording, recordingTime, formatTime } = useRecording();
   if (!isRecording) return null;
@@ -95,14 +94,6 @@ export default function App() {
                   options={{ title: 'New Recording' }}
                 />
                 <Stack.Screen
-                  name="Live"
-                  component={LiveScreen}
-                  options={{
-                    title: '🔴 Live Transcription',
-                    headerStyle: { backgroundColor: '#C0392B' },
-                  }}
-                />
-                <Stack.Screen
                   name="Upload"
                   component={UploadScreen}
                   options={{ title: 'Upload Audio' }}
@@ -126,7 +117,7 @@ export default function App() {
           }
         </Stack.Navigator>
 
-        {/* ✅ Floating bar visible on ALL screens when recording */}
+        {/* Floating bar visible on ALL screens when recording */}
         <FloatingRecordingBar navigationRef={navigationRef} />
 
       </NavigationContainer>

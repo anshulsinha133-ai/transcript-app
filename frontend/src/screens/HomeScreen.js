@@ -7,7 +7,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { getAllTranscripts, deleteTranscript, searchTranscripts, saveTranscript, createTranscriptObj } from '../utils/storage';
 import { getPendingJob, resumePendingTranscription } from '../services/api';
-import { supabase } from '../supabase'; // NEW: for user isolation
+import { supabase } from '../supabase';
 
 const FOLDERS = ['All', 'General', 'Work', 'Personal', 'Meetings', 'Lectures'];
 const FOLDER_ICONS = { All:'📋', General:'🗂️', Work:'💼', Personal:'👤', Meetings:'👥', Lectures:'🎓' };
@@ -89,8 +89,8 @@ export default function HomeScreen({ navigation }) {
   useFocusEffect(useCallback(() => {
     const loadTranscripts = async () => {
       setLoading(true);
-      const { data: { user } } = await supabase.auth.getUser(); // get current user
-      const data = await getAllTranscripts(user?.id);            // pass userId for isolation
+      const { data: { user } } = await supabase.auth.getUser();
+      const data = await getAllTranscripts(user?.id);
       setTranscripts(data);
       applyFilters(data, searchQuery, activeFolder);
       setLoading(false);
@@ -124,7 +124,7 @@ export default function HomeScreen({ navigation }) {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
         const { data: { user } } = await supabase.auth.getUser();
-        await deleteTranscript(id, user?.id);                    // pass userId — cannot delete others
+        await deleteTranscript(id, user?.id);
         const updated = transcripts.filter(t => t.id !== id);
         setTranscripts(updated);
         applyFilters(updated, searchQuery, activeFolder);
@@ -205,12 +205,12 @@ export default function HomeScreen({ navigation }) {
   };
 
   const renderCard = (item) => {
-    const bullets   = item.matchContext ? [] : extractBullets(item.autoSummary);
-    const duration  = formatDuration(item.duration);
-    const time      = new Date(item.createdAt).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
-    const langFlag  = LANG_FLAGS[item.detectedLang] || '🇬🇧';
+    const bullets    = item.matchContext ? [] : extractBullets(item.autoSummary);
+    const duration   = formatDuration(item.duration);
+    const time       = new Date(item.createdAt).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true });
+    const langFlag   = LANG_FLAGS[item.detectedLang] || '🇬🇧';
     const folderIcon = FOLDER_ICONS[item.folder || 'General'] || '🗂️';
-    const template  = TEMPLATE_MAP[item.mode] || null;
+    const template   = TEMPLATE_MAP[item.mode] || null;
 
     return (
       <TouchableOpacity
@@ -368,15 +368,15 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
 
+      {/* ── Action buttons: Record + Upload only (Live removed) ── */}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Record')}>
-          <Text style={styles.btnText}>🎙 Record</Text>
+        <TouchableOpacity style={styles.btnRecord} onPress={() => navigation.navigate('Record')}>
+          <Text style={styles.btnIcon}>🎙</Text>
+          <Text style={styles.btnText}>Record</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, { backgroundColor:'#C0392B' }]} onPress={() => navigation.navigate('Live')}>
-          <Text style={styles.btnText}>🔴 Live</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={() => navigation.navigate('Upload')}>
-          <Text style={[styles.btnText, styles.btnTextSecondary]}>📁 Upload</Text>
+        <TouchableOpacity style={styles.btnUpload} onPress={() => navigation.navigate('Upload')}>
+          <Text style={styles.btnIcon}>📁</Text>
+          <Text style={styles.btnTextSecondary}>Upload</Text>
         </TouchableOpacity>
       </View>
 
@@ -450,11 +450,16 @@ const styles = StyleSheet.create({
   searchIcon:           { fontSize:16, marginRight:8 },
   searchInput:          { flex:1, padding:10, fontSize:15, color:'#333' },
   clearBtnText:         { fontSize:16, color:'#888', padding:4 },
+  // ── Action buttons: 2-button layout now Live is gone ──
   actions:              { flexDirection:'row', paddingHorizontal:16, paddingBottom:8, gap:12 },
-  btn:                  { flex:1, backgroundColor:'#1A56A0', padding:12, borderRadius:10, alignItems:'center' },
-  btnSecondary:         { backgroundColor:'#FFFFFF', borderWidth:1.5, borderColor:'#1A56A0' },
-  btnText:              { color:'#FFFFFF', fontWeight:'bold', fontSize:14 },
-  btnTextSecondary:     { color:'#1A56A0' },
+  btnRecord:            { flex:1, backgroundColor:'#1A56A0', padding:14, borderRadius:12,
+                          alignItems:'center', flexDirection:'row', justifyContent:'center', gap:8 },
+  btnUpload:            { flex:1, backgroundColor:'#FFFFFF', padding:14, borderRadius:12,
+                          alignItems:'center', flexDirection:'row', justifyContent:'center',
+                          gap:8, borderWidth:1.5, borderColor:'#1A56A0' },
+  btnIcon:              { fontSize:18 },
+  btnText:              { color:'#FFFFFF', fontWeight:'bold', fontSize:15 },
+  btnTextSecondary:     { color:'#1A56A0', fontWeight:'bold', fontSize:15 },
   globalChatBtn:        { flexDirection:'row', alignItems:'center', backgroundColor:'#6C3FA0', marginHorizontal:16, marginBottom:8, padding:14, borderRadius:12, gap:12 },
   globalChatIcon:       { fontSize:22 },
   globalChatTextWrapper:{ flex:1 },
