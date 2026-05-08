@@ -1012,7 +1012,7 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro', 'universal-2'],
+      speech_model:       'universal-3-pro',
       webhook_url:        webhookUrl,
     });
 
@@ -1162,7 +1162,7 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro', 'universal-2'],
+      speech_model:       'universal-3-pro',
     });
 
     if (transcript.status === 'error') throw new Error('AssemblyAI error: ' + transcript.error);

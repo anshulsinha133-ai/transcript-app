@@ -11,21 +11,19 @@ export const useRecording = () => {
 };
 
 export const RecordingProvider = ({ children }) => {
-  const [isRecording,  setIsRecording]  = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isRecording,   setIsRecording]   = useState(false);
+  const [isProcessing,  setIsProcessing]  = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [statusText,   setStatusText]   = useState('Tap to start recording');
-  const [recordingUri, setRecordingUri] = useState(null);
+  const [statusText,    setStatusText]    = useState('Tap to start recording');
+  const [recordingUri,  setRecordingUri]  = useState(null);
 
-  const recordingRef    = useRef(null);
-  const timerRef        = useRef(null);
-  const startTimeRef    = useRef(null);
-  const appStateRef     = useRef(AppState.currentState);
-  const appStateSub     = useRef(null);
+  const recordingRef = useRef(null);
+  const timerRef     = useRef(null);
+  const startTimeRef = useRef(null);
+  const appStateRef  = useRef(AppState.currentState);
+  const appStateSub  = useRef(null);
 
-  // ─── Track app state changes ──────────────────────────────────────────────
-  // When app returns to foreground, recalculate elapsed time from wall clock
-  // so timer is accurate even after screen-off gaps
+  // Resync timer when app comes back to foreground
   useEffect(() => {
     appStateSub.current = AppState.addEventListener('change', (nextState) => {
       if (
@@ -34,16 +32,12 @@ export const RecordingProvider = ({ children }) => {
         isRecording &&
         startTimeRef.current
       ) {
-        // Resync timer from wall clock — interval may have drifted
         const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
         setRecordingTime(elapsed);
       }
       appStateRef.current = nextState;
     });
-
-    return () => {
-      appStateSub.current?.remove();
-    };
+    return () => { appStateSub.current?.remove(); };
   }, [isRecording]);
 
   useEffect(() => {
@@ -67,33 +61,33 @@ export const RecordingProvider = ({ children }) => {
         return false;
       }
 
-      // ✅ FIX 1: staysActiveInBackground MUST be true for background recording
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:         true,
         playsInSilentModeIOS:       true,
-        staysActiveInBackground:    true,   // KEY — keeps audio session alive
+        staysActiveInBackground:    true,
         interruptionModeIOS:        1,
         shouldDuckAndroid:          false,
         interruptionModeAndroid:    1,
         playThroughEarpieceAndroid: false,
       });
 
+      // High quality audio settings for best transcription accuracy
       const { recording } = await Audio.Recording.createAsync({
         android: {
           extension:        '.m4a',
           outputFormat:     Audio.AndroidOutputFormat.MPEG_4,
           audioEncoder:     Audio.AndroidAudioEncoder.AAC,
           sampleRate:       44100,
-          numberOfChannels: 1,
-          bitRate:          128000,
+          numberOfChannels: 2,   // stereo — captures room audio better
+          bitRate:          256000, // higher bitrate = cleaner audio for AssemblyAI
         },
         ios: {
           extension:            '.m4a',
           outputFormat:         Audio.IOSOutputFormat.MPEG4AAC,
           audioQuality:         Audio.IOSAudioQuality.MAX,
           sampleRate:           44100,
-          numberOfChannels:     1,
-          bitRate:              128000,
+          numberOfChannels:     2,
+          bitRate:              256000,
           linearPCMBitDepth:    16,
           linearPCMIsBigEndian: false,
           linearPCMIsFloat:     false,
@@ -109,18 +103,16 @@ export const RecordingProvider = ({ children }) => {
       setStatusText('Recording... speak now');
       setRecordingUri(null);
 
-      // ✅ FIX 2: Use wall-clock diff for timer so it stays accurate
-      // even when the app is backgrounded and setInterval is throttled
       timerRef.current = setInterval(() => {
         if (startTimeRef.current) {
-          const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-          setRecordingTime(elapsed);
+          setRecordingTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
         }
       }, 1000);
 
       return true;
 
     } catch (err) {
+      console.error('startRecording error:', err.message);
       Alert.alert('Error', 'Could not start recording: ' + err.message);
       return false;
     }
@@ -137,7 +129,6 @@ export const RecordingProvider = ({ children }) => {
       const uri = recordingRef.current.getURI();
       recordingRef.current = null;
 
-      // ✅ FIX 3: Calculate final duration from wall clock (accurate even after background)
       const finalDuration = startTimeRef.current
         ? Math.floor((Date.now() - startTimeRef.current) / 1000)
         : recordingTime;
@@ -145,15 +136,16 @@ export const RecordingProvider = ({ children }) => {
       setRecordingTime(finalDuration);
       setRecordingUri(uri);
 
-      // ✅ FIX 4: Release audio session after stopping
+      // Release audio session
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:      false,
         staysActiveInBackground: false,
       }).catch(() => {});
 
-      return uri; // ✅ single return — no duplicate
+      return uri;
 
     } catch (err) {
+      console.error('stopRecording error:', err.message);
       Alert.alert('Error', 'Could not stop recording: ' + err.message);
       setStatusText('Tap to start recording');
       setIsProcessing(false);
