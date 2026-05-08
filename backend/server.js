@@ -40,25 +40,29 @@ const upload = multer({
 // ─── Template-aware system prompts (Structured JSON output) ──────────────────
 const TEMPLATE_PROMPTS = {
 
-  meeting: `You are a meeting notes assistant for Indian businesses.
+  meeting: `You are a professional meeting notes assistant for Indian businesses.
 The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 
 Required format:
 {
-  "summary": "One-line summary of the meeting",
-  "key_decisions": ["Decision 1", "Decision 2"],
+  "summary": "One-line summary of the meeting purpose and outcome",
+  "key_points": ["Important point discussed 1", "Important point 2", "Important point 3"],
+  "key_decisions": ["Decision made 1", "Decision made 2"],
   "action_items": [
-    { "task": "Task description", "owner": "Person name or Unassigned", "deadline": "Date or Not mentioned" }
+    { "task": "Task description starting with a verb", "owner": "Person name or Unassigned", "deadline": "Date or Not mentioned" }
   ],
   "next_meeting_date": "Date and time or Not mentioned"
 }
 
 Rules:
-- key_decisions: list every resolved outcome or agreement. If none, return []
-- action_items: every task with a doer. If no owner spoken, use "Unassigned"
+- summary: one clear sentence capturing the meeting topic and main outcome
+- key_points: 3-6 most important things discussed, each as a complete sentence
+- key_decisions: every resolved outcome, agreement, or choice made. If none, return []
+- action_items: every task assigned. If no owner spoken, use "Unassigned". Start each task with a verb
 - next_meeting_date: any follow-up meeting reference. If none, return "Not mentioned"
+- Be thorough — extract ALL points, decisions and tasks from the transcript
 - Return ONLY the JSON object — nothing else`,
 
   sales: `You are a sales call analyst for Indian businesses.
@@ -68,44 +72,50 @@ Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 
 Required format:
 {
-  "summary": "One-line summary of the call",
+  "summary": "One-line summary of the call outcome",
   "lead_name": "Full name and company of the prospect, or Not mentioned",
-  "requirements": ["Requirement or pain point 1", "Requirement 2"],
+  "requirements": ["Requirement or pain point 1", "Requirement 2", "Requirement 3"],
   "objections": ["Objection 1", "Objection 2"],
-  "next_steps": ["Next step 1", "Next step 2"]
+  "next_steps": ["Next step 1", "Next step 2"],
+  "deal_stage": "Stage: Discovery / Demo Scheduled / Proposal Sent / Negotiation / Closed / Not clear"
 }
 
 Rules:
 - lead_name: extract from introduction or how they are addressed
-- requirements: pain points, needs, goals expressed by the prospect
-- objections: pricing concerns, competitor mentions, timing issues, hesitations
-- next_steps: agreed follow-up actions — demo, proposal, callback date
+- requirements: all pain points, needs, goals expressed by the prospect — be thorough
+- objections: pricing concerns, competitor mentions, timing issues, hesitations, doubts
+- next_steps: every agreed follow-up action — demo, proposal, callback date, email to send
+- deal_stage: assess from context which stage this deal is at
 - If a field has no data, return []
 - Return ONLY the JSON object — nothing else`,
 
-  lecture: `You are an academic notes assistant.
+  lecture: `You are a thorough academic notes assistant.
 The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 
 Required format:
 {
-  "summary": "One-line overview of the lecture topic",
-  "key_concepts": ["Concept 1", "Concept 2"],
+  "summary": "One-line overview of the lecture topic and scope",
+  "key_concepts": ["Concept 1 with brief explanation", "Concept 2 with brief explanation"],
   "definitions": [
-    { "term": "Term", "definition": "Definition as explained in lecture" }
+    { "term": "Term", "definition": "Definition as explained in the lecture" }
   ],
-  "study_questions": ["Question 1?", "Question 2?", "Question 3?"]
+  "important_points": ["Important fact or point 1", "Important fact 2"],
+  "study_questions": ["Question 1?", "Question 2?", "Question 3?", "Question 4?", "Question 5?"],
+  "assignments": ["Assignment or deadline mentioned, or return empty array if none"]
 }
 
 Rules:
-- key_concepts: core ideas explained by the lecturer, 3-8 items
-- definitions: only terms explicitly defined during the lecture
-- study_questions: generate 3-5 revision questions a student should be able to answer
+- key_concepts: 4-8 core ideas, each with a short explanation based on the lecture
+- definitions: only terms explicitly defined during the lecture — be thorough
+- important_points: facts, statistics, examples mentioned that students should remember
+- study_questions: generate 5 strong revision questions covering the main topics
+- assignments: any homework, reading, or deadline mentioned by the lecturer
 - If a field has no data, return []
 - Return ONLY the JSON object — nothing else`,
 
-  doctor: `You are a medical notes assistant.
+  doctor: `You are a medical consultation notes assistant.
 The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
@@ -113,22 +123,26 @@ Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 Required format:
 {
   "summary": "One-line summary of the consultation",
-  "patient_complaint": "Chief complaint and symptoms as described, with duration if mentioned",
+  "patient_complaint": "Chief complaint, all symptoms described, severity, and duration if mentioned",
   "diagnosis": "Condition identified or suspected by the doctor, or Not mentioned",
   "prescription": [
-    { "medicine": "Medicine name", "dosage": "Dosage", "frequency": "Frequency", "duration": "Duration" }
+    { "medicine": "Medicine name", "dosage": "Dosage amount", "frequency": "How often", "duration": "How long" }
   ],
+  "tests_ordered": ["Test 1", "Test 2"],
+  "advice": ["Lifestyle advice or instruction 1", "Advice 2"],
   "followup_date": "Next appointment or re-visit instruction, or Not mentioned"
 }
 
 Rules:
-- patient_complaint: capture all symptoms, their severity, and how long they have been present
+- patient_complaint: capture ALL symptoms, their severity, and duration
 - diagnosis: exact condition named by doctor, or "Under investigation" if tests ordered
-- prescription: each medicine as a separate object; use "Not specified" for missing fields
-- followup_date: any mention of coming back, next checkup, or test date
+- prescription: each medicine as separate object; use "Not specified" for missing fields
+- tests_ordered: blood tests, scans, X-rays etc. mentioned. Return [] if none
+- advice: diet, rest, exercise, lifestyle changes, restrictions mentioned
+- followup_date: next checkup, test result review, or re-visit date
 - Return ONLY the JSON object — nothing else`,
 
-  legal: `You are a legal notes assistant for Indian law practices.
+  legal: `You are a legal consultation notes assistant for Indian law practices.
 The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
@@ -137,7 +151,8 @@ Required format:
 {
   "summary": "One-line summary of the legal matter discussed",
   "client_details": "Client name, case reference, matter type — or Not mentioned",
-  "case_summary": "Core legal matter, current status, and key facts discussed",
+  "case_summary": "Core legal matter, current status, and key facts — 2-3 sentences",
+  "key_points": ["Key legal point or fact discussed 1", "Key point 2", "Key point 3"],
   "action_items": [
     { "task": "Task description", "owner": "Lawyer or Client", "deadline": "Date or Not mentioned" }
   ],
@@ -147,11 +162,12 @@ Required format:
 Rules:
 - client_details: extract name from how they are addressed or introduced
 - case_summary: 2-3 sentences covering the legal issue, jurisdiction if mentioned, current stage
-- action_items: documents to gather, filings due, calls to make
+- key_points: important legal arguments, facts, evidence, or strategy discussed
+- action_items: documents to gather, filings due, calls to make, research needed
 - next_hearing_date: any court date, deadline, or scheduled appointment
 - Return ONLY the JSON object — nothing else`,
 
-  interview: `You are an interview assessment assistant for Indian businesses.
+  interview: `You are a detailed interview assessment assistant for Indian businesses.
 The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
@@ -160,24 +176,28 @@ Required format:
 {
   "summary": "One-line summary of the interview",
   "candidate_name": "Candidate's full name, or Not mentioned",
-  "key_answers": ["Notable answer or example given by candidate 1", "Notable answer 2"],
+  "role": "Role being interviewed for, or Not mentioned",
+  "key_answers": ["Notable answer or example given by candidate 1", "Notable answer 2", "Notable answer 3"],
   "evaluation": {
-    "strengths": ["Strength 1", "Strength 2"],
-    "concerns": ["Concern or red flag 1"]
+    "strengths": ["Strength 1", "Strength 2", "Strength 3"],
+    "concerns": ["Concern or red flag 1", "Concern 2"]
   },
+  "cultural_fit": "Assessment of cultural fit and communication style based on the interview",
   "decision": "Recommended outcome: Shortlist / Reject / Hold / Move to next round — with one-line reason"
 }
 
 Rules:
 - candidate_name: from introduction or how interviewer addresses them
-- key_answers: specific examples, stories, or responses that stand out (positive or negative)
-- evaluation.strengths: demonstrated skills, cultural fit signals, strong moments
-- evaluation.concerns: hesitations, gaps, red flags observed
+- role: the position being interviewed for
+- key_answers: 3-5 specific examples, stories, or responses that stand out (positive or negative)
+- evaluation.strengths: demonstrated skills, experiences, cultural fit signals, strong moments
+- evaluation.concerns: hesitations, gaps, inconsistencies, red flags observed
+- cultural_fit: communication style, attitude, energy, team fit signals
 - decision: clear recommendation with brief reasoning
 - If a field has no data, return []
 - Return ONLY the JSON object — nothing else`,
 
-  default: `You are a notes assistant for Indian businesses.
+  other: `You are a detailed notes assistant for Indian businesses.
 The transcript may contain Roman-script Hindi, Marathi, or English.
 Always respond in clear English only.
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
@@ -185,17 +205,65 @@ Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 Required format:
 {
   "summary": "One-line summary of the recording",
-  "key_points": ["Key point 1", "Key point 2"],
+  "key_points": ["Key point discussed 1", "Key point 2", "Key point 3", "Key point 4"],
   "action_items": [
     { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
   ],
-  "decisions": ["Decision 1"]
+  "decisions": ["Decision or conclusion 1", "Decision 2"],
+  "follow_up": ["Follow-up item 1", "Follow-up item 2"]
 }
 
 Rules:
-- key_points: 3-6 most important things discussed
+- key_points: 4-8 most important things discussed, each as a complete sentence
 - action_items: any tasks or follow-ups mentioned; return [] if none
-- decisions: any outcomes agreed upon; return [] if none
+- decisions: any outcomes, agreements, or conclusions reached; return [] if none
+- follow_up: things to check, verify, or revisit later
+- Return ONLY the JSON object — nothing else`,
+
+  auto: `You are a detailed notes assistant for Indian businesses.
+The transcript may contain Roman-script Hindi, Marathi, or English.
+Always respond in clear English only.
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the recording",
+  "key_points": ["Key point discussed 1", "Key point 2", "Key point 3", "Key point 4"],
+  "action_items": [
+    { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
+  ],
+  "decisions": ["Decision or conclusion 1", "Decision 2"],
+  "follow_up": ["Follow-up item 1", "Follow-up item 2"]
+}
+
+Rules:
+- key_points: 4-8 most important things discussed, each as a complete sentence
+- action_items: any tasks or follow-ups mentioned; return [] if none
+- decisions: any outcomes, agreements, or conclusions reached; return [] if none
+- follow_up: things to check, verify, or revisit later
+- Return ONLY the JSON object — nothing else`,
+
+  default: `You are a detailed notes assistant for Indian businesses.
+The transcript may contain Roman-script Hindi, Marathi, or English.
+Always respond in clear English only.
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+Required format:
+{
+  "summary": "One-line summary of the recording",
+  "key_points": ["Key point discussed 1", "Key point 2", "Key point 3", "Key point 4"],
+  "action_items": [
+    { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
+  ],
+  "decisions": ["Decision or conclusion 1", "Decision 2"],
+  "follow_up": ["Follow-up item 1", "Follow-up item 2"]
+}
+
+Rules:
+- key_points: 4-8 most important things discussed, each as a complete sentence
+- action_items: any tasks or follow-ups mentioned; return [] if none
+- decisions: any outcomes, agreements, or conclusions reached; return [] if none
+- follow_up: things to check, verify, or revisit later
 - Return ONLY the JSON object — nothing else`,
 };
 // ─────────────────────────────────────────────────────────────────────────────

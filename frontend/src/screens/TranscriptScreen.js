@@ -251,8 +251,74 @@ const StructuredSummary = ({ summary, mode }) => {
         <HighlightBox icon="🎯" label="Decision" value={data.decision} bg="#F0F9FF" color="#0369A1" />
       </>}
 
-      {/* ── DEFAULT (no template or language mode) ── */}
-      {(!mode || !TEMPLATE_MAP[mode]) && <>
+      {/* ── MEETING — add key_points ── */}
+      {mode === 'meeting' && data.key_points?.length > 0 && (
+        <View style={ss.block}>
+          <SectionLabel icon="💬" text="Key Points Discussed" />
+          {data.key_points.map((p, i) => <BulletItem key={i} text={p} />)}
+        </View>
+      )}
+
+      {/* ── SALES — add deal_stage ── */}
+      {mode === 'sales' && data.deal_stage && (
+        <View style={[ss.highlightBox, { backgroundColor: '#ECFDF5', borderColor: '#059669' }]}>
+          <Text style={[ss.highlightLabel, { color: '#059669' }]}>📊 Deal Stage</Text>
+          <Text style={ss.highlightValue}>{data.deal_stage}</Text>
+        </View>
+      )}
+
+      {/* ── DOCTOR — add tests_ordered and advice ── */}
+      {mode === 'doctor' && data.tests_ordered?.length > 0 && (
+        <View style={ss.block}>
+          <SectionLabel icon="🧪" text="Tests Ordered" color="#DC2626" />
+          {data.tests_ordered.map((t, i) => <BulletItem key={i} text={t} color="#DC2626" />)}
+        </View>
+      )}
+      {mode === 'doctor' && data.advice?.length > 0 && (
+        <View style={ss.block}>
+          <SectionLabel icon="💬" text="Doctor's Advice" color="#DC2626" />
+          {data.advice.map((a, i) => <BulletItem key={i} text={a} color="#DC2626" />)}
+        </View>
+      )}
+
+      {/* ── LEGAL — add key_points ── */}
+      {mode === 'legal' && data.key_points?.length > 0 && (
+        <View style={ss.block}>
+          <SectionLabel icon="📌" text="Key Legal Points" color="#92400E" />
+          {data.key_points.map((p, i) => <BulletItem key={i} text={p} color="#92400E" />)}
+        </View>
+      )}
+
+      {/* ── INTERVIEW — add role and cultural_fit ── */}
+      {mode === 'interview' && data.role && data.role !== 'Not mentioned' && (
+        <View style={[ss.highlightBox, { backgroundColor: '#F0F9FF', borderColor: '#0369A1' }]}>
+          <Text style={[ss.highlightLabel, { color: '#0369A1' }]}>💼 Role</Text>
+          <Text style={ss.highlightValue}>{data.role}</Text>
+        </View>
+      )}
+      {mode === 'interview' && data.cultural_fit && (
+        <View style={[ss.plainBox, { backgroundColor: '#F0F9FF', borderColor: '#BAE6FD' }]}>
+          <Text style={[ss.plainBoxLabel, { color: '#0369A1' }]}>🤝 Cultural Fit</Text>
+          <Text style={ss.plainBoxText}>{data.cultural_fit}</Text>
+        </View>
+      )}
+
+      {/* ── LECTURE — add important_points and assignments ── */}
+      {mode === 'lecture' && data.important_points?.length > 0 && (
+        <View style={ss.block}>
+          <SectionLabel icon="📌" text="Important Points" color="#7C3AED" />
+          {data.important_points.map((p, i) => <BulletItem key={i} text={p} color="#7C3AED" />)}
+        </View>
+      )}
+      {mode === 'lecture' && data.assignments?.length > 0 && (
+        <View style={ss.block}>
+          <SectionLabel icon="📝" text="Assignments / Deadlines" color="#7C3AED" />
+          {data.assignments.map((a, i) => <BulletItem key={i} text={a} color="#7C3AED" />)}
+        </View>
+      )}
+
+      {/* ── DEFAULT / OTHER / AUTO ── */}
+      {(!mode || !TEMPLATE_MAP[mode] || mode === 'other' || mode === 'auto') && <>
         {data.key_points?.length > 0 && (
           <View style={ss.block}>
             <SectionLabel icon="💡" text="Key Points" />
@@ -269,6 +335,12 @@ const StructuredSummary = ({ summary, mode }) => {
           <View style={ss.block}>
             <SectionLabel icon="✅" text="Decisions" />
             {data.decisions.map((d, i) => <BulletItem key={i} text={d} />)}
+          </View>
+        )}
+        {data.follow_up?.length > 0 && (
+          <View style={ss.block}>
+            <SectionLabel icon="🔄" text="Follow Up" />
+            {data.follow_up.map((f, i) => <BulletItem key={i} text={f} />)}
           </View>
         )}
       </>}
