@@ -16,6 +16,7 @@ import RecordScreen     from './src/screens/RecordScreen';
 import UploadScreen     from './src/screens/UploadScreen';
 import TranscriptScreen from './src/screens/TranscriptScreen';
 import GlobalChatScreen from './src/screens/GlobalChatScreen';
+import PaywallScreen    from './src/screens/PaywallScreen';
 
 const Stack = createStackNavigator();
 
@@ -107,6 +108,14 @@ export default function App() {
                   name="GlobalChat"
                   component={GlobalChatScreen}
                   options={{ headerShown: false }}
+                />
+                <Stack.Screen
+                  name="Paywall"
+                  component={PaywallScreen}
+                  options={{
+                    title: 'Upgrade to Pro',
+                    headerStyle: { backgroundColor: '#0D3B7A' },
+                  }}
                 />
               </>
             : <Stack.Screen

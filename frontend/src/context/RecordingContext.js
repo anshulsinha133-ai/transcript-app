@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import { Alert, AppState } from 'react-native';
 import { Audio } from 'expo-av';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 const RecordingContext = createContext(null);
 
@@ -98,6 +99,9 @@ export const RecordingProvider = ({ children }) => {
       recordingRef.current = recording;
       startTimeRef.current = Date.now();
 
+      // Keep CPU alive so recording continues when screen locks
+      await activateKeepAwakeAsync('recording');
+
       setIsRecording(true);
       setRecordingTime(0);
       setStatusText('Recording... speak now');
@@ -136,7 +140,8 @@ export const RecordingProvider = ({ children }) => {
       setRecordingTime(finalDuration);
       setRecordingUri(uri);
 
-      // Release audio session
+      // Release keep-awake and audio session
+      deactivateKeepAwake('recording');
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:      false,
         staysActiveInBackground: false,
@@ -146,6 +151,7 @@ export const RecordingProvider = ({ children }) => {
 
     } catch (err) {
       console.error('stopRecording error:', err.message);
+      deactivateKeepAwake('recording');
       Alert.alert('Error', 'Could not stop recording: ' + err.message);
       setStatusText('Tap to start recording');
       setIsProcessing(false);

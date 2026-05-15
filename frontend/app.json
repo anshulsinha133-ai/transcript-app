@@ -25,14 +25,22 @@
       "permissions": [
         "RECORD_AUDIO",
         "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "WRITE_EXTERNAL_STORAGE",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "WAKE_LOCK"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-av"
+      [
+        "expo-av",
+        {
+          "microphonePermission": "VoxNote needs microphone access to record meetings and conversations."
+        }
+      ]
     ],
     "extra": {
       "eas": {

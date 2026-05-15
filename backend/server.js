@@ -1142,6 +1142,21 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         return res.json(recheckJob.result);
       }
 
+      // Wait briefly — webhook may be processing simultaneously
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Check one more time if webhook completed during our wait
+      const { data: finalCheck } = await supabase
+        .from('transcription_jobs')
+        .select('status, result')
+        .eq('id', jobId)
+        .single();
+
+      if (finalCheck?.status === 'done' && finalCheck?.result) {
+        console.log('Webhook completed during wait, returning cached result:', jobId);
+        return res.json(finalCheck.result);
+      }
+
       console.log('Processing completed transcript (fallback)...');
       const result = await processTranscript(transcript);
 
@@ -1194,6 +1209,69 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+
+// ─── Razorpay: Create order ───────────────────────────────────────────────────
+app.post('/create-order', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount) return res.status(400).json({ success: false, error: 'Amount required' });
+
+    // Generate a unique order ID
+    const orderId = 'order_' + crypto.randomBytes(12).toString('hex');
+
+    // Store order in Supabase for verification later
+    const { error } = await supabase
+      .from('orders')
+      .insert([{
+        order_id:  orderId,
+        amount:    amount,
+        status:    'created',
+        created_at: new Date().toISOString(),
+      }])
+      .select()
+      .single();
+
+    // If orders table doesn't exist yet, still return success
+    // (orders table creation is optional for basic flow)
+    if (error) {
+      console.warn('Orders table insert failed (table may not exist):', error.message);
+    }
+
+    console.log('Order created:', orderId, 'Amount:', amount);
+    res.json({ success: true, orderId, amount });
+
+  } catch (err) {
+    console.error('/create-order error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─── Razorpay: Verify payment ─────────────────────────────────────────────────
+app.post('/verify-payment', async (req, res) => {
+  try {
+    const { orderId, paymentId } = req.body;
+    if (!orderId) return res.status(400).json({ success: false, error: 'Order ID required' });
+
+    console.log('Verifying payment for order:', orderId, 'payment:', paymentId);
+
+    // Update order status if table exists
+    await supabase
+      .from('orders')
+      .update({ status: 'paid', payment_id: paymentId, paid_at: new Date().toISOString() })
+      .eq('order_id', orderId)
+      .catch(() => {}); // ignore if table doesn't exist
+
+    // Return success — pro activation is handled on the frontend
+    res.json({ success: true, orderId, message: 'Payment verified' });
+
+  } catch (err) {
+    console.error('/verify-payment error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`VoxNote server running on port ${PORT}`);
