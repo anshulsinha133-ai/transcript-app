@@ -131,7 +131,7 @@ export const startTranscription = async (uri, onProgress = null) => {
         formData,
         {
           headers:          { 'Content-Type': 'multipart/form-data' },
-          timeout:          180000,
+          timeout:          300000, // 5 min timeout for large files
           transformRequest: (data) => data,
         }
       );
@@ -147,7 +147,7 @@ export const startTranscription = async (uri, onProgress = null) => {
     } catch (err) {
       console.error(`Upload attempt ${attempt} failed:`, err.message);
       if (attempt < maxUploadAttempts) {
-        const waitMs = attempt * 5000;
+        const waitMs = attempt * 3000; // shorter retry gap
         if (onProgress) onProgress(`Upload failed — retrying in ${waitMs/1000}s...`, 10);
         await new Promise(resolve => setTimeout(resolve, waitMs));
       } else {

@@ -78,16 +78,16 @@ export const RecordingProvider = ({ children }) => {
           outputFormat:     Audio.AndroidOutputFormat.MPEG_4,
           audioEncoder:     Audio.AndroidAudioEncoder.AAC,
           sampleRate:       44100,
-          numberOfChannels: 2,   // stereo — captures room audio better
-          bitRate:          256000, // higher bitrate = cleaner audio for AssemblyAI
+          numberOfChannels: 1,   // mono — smaller file, faster upload
+          bitRate:          128000, // good quality for speech, keeps file size manageable
         },
         ios: {
           extension:            '.m4a',
           outputFormat:         Audio.IOSOutputFormat.MPEG4AAC,
           audioQuality:         Audio.IOSAudioQuality.MAX,
           sampleRate:           44100,
-          numberOfChannels:     2,
-          bitRate:              256000,
+          numberOfChannels:     1,
+          bitRate:              128000,
           linearPCMBitDepth:    16,
           linearPCMIsBigEndian: false,
           linearPCMIsFloat:     false,
