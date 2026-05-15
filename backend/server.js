@@ -1015,11 +1015,10 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
     const job = await aai.transcripts.submit({
       audio:              uploadUrl,
       speaker_labels:     true,
-      speakers_expected:  5,
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro'],
+      speech_models:      ['universal-3-pro', 'universal-2'],
       webhook_url:        webhookUrl,
     });
 
@@ -1048,6 +1047,7 @@ app.post('/webhook/assemblyai', async (req, res) => {
     res.json({ success: true });
 
     if (status !== 'completed') {
+      console.error('AssemblyAI job failed. Status:', status, '| Job:', transcript_id);
       await supabase.from('transcription_jobs')
         .update({ status })
         .eq('id', transcript_id);
@@ -1068,8 +1068,18 @@ app.post('/webhook/assemblyai', async (req, res) => {
     console.log('Fetching transcript from AssemblyAI...');
     const transcript = await aai.transcripts.get(transcript_id);
 
-    if (transcript.status !== 'completed') return;
+    if (transcript.status !== 'completed') {
+      console.error('AssemblyAI transcript error:', transcript.error || 'unknown');
+      return;
+    }
 
+    if (transcript.status === 'error') {
+      console.error('AssemblyAI error details:', transcript.error);
+      await supabase.from('transcription_jobs')
+        .update({ status: 'error' })
+        .eq('id', transcript_id);
+      return;
+    }
     console.log('Processing transcript (webhook)...');
     const result = await processTranscript(transcript); // webhook has no mode — uses default
 
@@ -1109,9 +1119,11 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
     console.log('AssemblyAI job status:', transcript.status);
 
     if (transcript.status === 'error') {
+      console.error('AssemblyAI job error for', jobId, ':', transcript.error);
       await supabase.from('transcription_jobs')
         .update({ status: 'error' })
         .eq('id', jobId);
+      console.error('AssemblyAI error for job', jobId, ':', transcript.error);
       return res.json({ success: false, status: 'error', error: transcript.error });
     }
 
@@ -1165,11 +1177,10 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
     const transcript = await aai.transcripts.transcribe({
       audio:              uploadUrl,
       speaker_labels:     true,
-      speakers_expected:  5,
       language_detection: true,
       format_text:        true,
       punctuate:          true,
-      speech_models:      ['universal-3-pro'],
+      speech_models:      ['universal-3-pro', 'universal-2'],
     });
 
     if (transcript.status === 'error') throw new Error('AssemblyAI error: ' + transcript.error);
