@@ -3,6 +3,7 @@ import { Alert, AppState, Platform, Linking } from 'react-native';
 import { Audio } from 'expo-av';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import notifee, { AndroidImportance } from '@notifee/react-native';
 
 const RecordingContext = createContext(null);
 
@@ -54,7 +55,53 @@ export const RecordingProvider = ({ children }) => {
     return `${m}:${s}`;
   };
 
-  // ─── Battery optimization exemption for Samsung/Android ──────────────────
+  // ─── Start foreground service notification (keeps recording alive) ────────
+  const startForegroundService = async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      // Create notification channel
+      const channelId = await notifee.createChannel({
+        id:         'recording',
+        name:       'VoxNote Recording',
+        importance: AndroidImportance.LOW,
+        sound:      null,
+        vibration:  false,
+      });
+
+      // Display foreground service notification
+      // This is what keeps Android from killing the recording when screen locks
+      await notifee.displayNotification({
+        id:    'voxnote-recording',
+        title: '🎙 VoxNote is Recording',
+        body:  'Recording in progress — screen can be locked safely',
+        android: {
+          channelId,
+          asForegroundService: true,  // ← THIS is the key — true foreground service
+          ongoing:             true,
+          pressAction:         { id: 'default' },
+          color:               '#1A56A0',
+          smallIcon:           'ic_launcher',
+          importance:          AndroidImportance.LOW,
+        },
+      });
+      console.log('Foreground service notification started');
+    } catch (e) {
+      console.warn('Could not start foreground service:', e.message);
+    }
+  };
+
+  const stopForegroundService = async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      await notifee.stopForegroundService();
+      await notifee.cancelNotification('voxnote-recording');
+      console.log('Foreground service stopped');
+    } catch (e) {
+      console.warn('Could not stop foreground service:', e.message);
+    }
+  };
+
+  // ─── Battery optimization check ───────────────────────────────────────────
   const checkBatteryOptimization = async () => {
     if (Platform.OS !== 'android') return;
     try {
@@ -63,10 +110,10 @@ export const RecordingProvider = ({ children }) => {
         await AsyncStorage.setItem('voxnote_battery_asked', 'true');
         Alert.alert(
           '🔋 Enable Background Recording',
-          'To keep recording when the screen is locked, tap "Allow" on the next screen to disable battery optimization for VoxNote.\n\nThis is required on Samsung phones.',
+          'To keep recording when the screen is locked, tap "Allow" to disable battery optimization for VoxNote.',
           [
             {
-              text: '✅ Allow (Recommended)',
+              text: '✅ Allow',
               onPress: async () => {
                 try {
                   await Linking.sendIntent(
@@ -82,9 +129,7 @@ export const RecordingProvider = ({ children }) => {
           ]
         );
       }
-    } catch (e) {
-      console.log('Battery check error:', e.message);
-    }
+    } catch (e) { console.log('Battery check error:', e.message); }
   };
 
   const startRecording = async () => {
@@ -95,7 +140,10 @@ export const RecordingProvider = ({ children }) => {
         return false;
       }
 
-      // Ask user to disable battery optimization on first use
+      // Request notification permission (needed for foreground service on Android 13+)
+      await notifee.requestPermission();
+
+      // Check battery optimization
       await checkBatteryOptimization();
 
       await Audio.setAudioModeAsync({
@@ -115,6 +163,9 @@ export const RecordingProvider = ({ children }) => {
       recordingRef.current = recording;
       startTimeRef.current = Date.now();
 
+      // Start foreground service AFTER recording starts
+      // This shows notification and prevents Android from killing the process
+      await startForegroundService();
       await activateKeepAwakeAsync('recording');
 
       setIsRecording(true);
@@ -155,6 +206,8 @@ export const RecordingProvider = ({ children }) => {
       setRecordingTime(finalDuration);
       setRecordingUri(uri);
 
+      // Stop foreground service
+      await stopForegroundService();
       deactivateKeepAwake('recording');
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:      false,
@@ -165,6 +218,7 @@ export const RecordingProvider = ({ children }) => {
 
     } catch (err) {
       console.error('stopRecording error:', err.message);
+      await stopForegroundService();
       deactivateKeepAwake('recording');
       Alert.alert('Error', 'Could not stop recording: ' + err.message);
       setStatusText('Tap to start recording');
@@ -184,17 +238,9 @@ export const RecordingProvider = ({ children }) => {
 
   return (
     <RecordingContext.Provider value={{
-      isRecording,
-      isProcessing,
-      recordingTime,
-      statusText,
-      recordingUri,
-      setStatusText,
-      setIsProcessing,
-      startRecording,
-      stopRecording,
-      resetRecording,
-      formatTime,
+      isRecording, isProcessing, recordingTime, statusText, recordingUri,
+      setStatusText, setIsProcessing, startRecording, stopRecording,
+      resetRecording, formatTime,
     }}>
       {children}
     </RecordingContext.Provider>

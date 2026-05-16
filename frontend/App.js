@@ -1,3 +1,6 @@
+import notifee from '@notifee/react-native';
+notifee.registerForegroundService((notification) => { return new Promise(() => {}); });
+
 import React, { useState, useEffect } from 'react';
 import {
   NavigationContainer,
