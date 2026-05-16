@@ -1,11 +1,10 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import { Alert, AppState, Platform, Linking } from 'react-native';
-import AudioRecorderPlayer from 'react-native-audio-recorder-player';
+import { Audio } from 'expo-av';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const RecordingContext = createContext(null);
-const audioRecorderPlayer = new AudioRecorderPlayer();
 
 export const useRecording = () => {
   const context = useContext(RecordingContext);
@@ -20,13 +19,12 @@ export const RecordingProvider = ({ children }) => {
   const [statusText,    setStatusText]    = useState('Tap to start recording');
   const [recordingUri,  setRecordingUri]  = useState(null);
 
-  const startTimeRef = useRef(null);
+  const recordingRef = useRef(null);
   const timerRef     = useRef(null);
+  const startTimeRef = useRef(null);
   const appStateRef  = useRef(AppState.currentState);
   const appStateSub  = useRef(null);
-  const currentUriRef = useRef(null);
 
-  // Resync timer when app comes back to foreground
   useEffect(() => {
     appStateSub.current = AppState.addEventListener('change', (nextState) => {
       if (
@@ -56,7 +54,7 @@ export const RecordingProvider = ({ children }) => {
     return `${m}:${s}`;
   };
 
-  // ─── Battery optimization exemption (Samsung One UI) ─────────────────────
+  // ─── Battery optimization exemption for Samsung/Android ──────────────────
   const checkBatteryOptimization = async () => {
     if (Platform.OS !== 'android') return;
     try {
@@ -91,35 +89,32 @@ export const RecordingProvider = ({ children }) => {
 
   const startRecording = async () => {
     try {
-      // Check battery optimization on first use
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        Alert.alert('Permission needed', 'Please allow microphone access');
+        return false;
+      }
+
+      // Ask user to disable battery optimization on first use
       await checkBatteryOptimization();
 
-      // Set output path
-      const path = Platform.select({
-        android: `${Date.now()}_recording.m4a`,
-        ios:     `${Date.now()}_recording.m4a`,
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS:         true,
+        playsInSilentModeIOS:       true,
+        staysActiveInBackground:    true,
+        interruptionModeIOS:        1,
+        shouldDuckAndroid:          false,
+        interruptionModeAndroid:    1,
+        playThroughEarpieceAndroid: false,
       });
 
-      // Start recording with react-native-audio-recorder-player
-      // This library uses Android's native MediaRecorder with proper
-      // foreground service support — works when screen is locked
-      const uri = await audioRecorderPlayer.startRecorder(path, {
-        AVFormatIDKeyIOS:                  'aac',
-        AVSampleRateKeyIOS:                44100,
-        AVNumberOfChannelsKeyIOS:          1,
-        AVEncoderAudioQualityKeyIOS:       'high',
-        AudioEncoderAndroid:               'aac',
-        AudioSourceAndroid:                'mic',
-        OutputFormatAndroid:               'mpeg_4',
-        AudioSamplingRateAndroid:          44100,
-        AudioChannelsAndroid:              1,
-        AudioEncodingBitRateAndroid:       128000,
-      });
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
 
-      currentUriRef.current = uri;
-      startTimeRef.current  = Date.now();
+      recordingRef.current = recording;
+      startTimeRef.current = Date.now();
 
-      // Keep screen from turning off (belt + suspenders approach)
       await activateKeepAwakeAsync('recording');
 
       setIsRecording(true);
@@ -127,14 +122,12 @@ export const RecordingProvider = ({ children }) => {
       setStatusText('Recording... speak now');
       setRecordingUri(null);
 
-      // Wall-clock timer — stays accurate even when screen is off
       timerRef.current = setInterval(() => {
         if (startTimeRef.current) {
           setRecordingTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
         }
       }, 1000);
 
-      console.log('Recording started, URI:', uri);
       return true;
 
     } catch (err) {
@@ -151,8 +144,9 @@ export const RecordingProvider = ({ children }) => {
       setStatusText('Processing your recording...');
       setIsProcessing(true);
 
-      const uri = await audioRecorderPlayer.stopRecorder();
-      audioRecorderPlayer.removeRecordBackListener();
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
 
       const finalDuration = startTimeRef.current
         ? Math.floor((Date.now() - startTimeRef.current) / 1000)
@@ -162,8 +156,11 @@ export const RecordingProvider = ({ children }) => {
       setRecordingUri(uri);
 
       deactivateKeepAwake('recording');
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS:      false,
+        staysActiveInBackground: false,
+      }).catch(() => {});
 
-      console.log('Recording stopped, URI:', uri);
       return uri;
 
     } catch (err) {
@@ -180,8 +177,7 @@ export const RecordingProvider = ({ children }) => {
     setIsRecording(false);
     setIsProcessing(false);
     setRecordingTime(0);
-    startTimeRef.current  = null;
-    currentUriRef.current = null;
+    startTimeRef.current = null;
     setStatusText('Tap to start recording');
     setRecordingUri(null);
   };
