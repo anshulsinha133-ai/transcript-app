@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
-import { Alert, AppState } from 'react-native';
+import { Alert, AppState, Platform, Linking } from 'react-native';
 import { Audio } from 'expo-av';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const RecordingContext = createContext(null);
 
@@ -54,6 +55,50 @@ export const RecordingProvider = ({ children }) => {
     return `${m}:${s}`;
   };
 
+  // ─── Request battery optimization exemption ───────────────────────────────
+  // Samsung One UI aggressively kills background apps — this opens the system
+  // dialog to whitelist VoxNote so recording continues when screen is locked
+  const requestBatteryOptimizationExemption = async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      await Linking.sendIntent(
+        'android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+        [{ key: 'package', value: 'com.voxnote.app' }]
+      );
+    } catch (e) {
+      // Fallback — open app battery settings
+      try {
+        await Linking.openSettings();
+      } catch (e2) {
+        console.log('Could not open battery settings:', e2.message);
+      }
+    }
+  };
+
+  const checkBatteryOptimization = async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const hasAsked = await AsyncStorage.getItem('voxnote_battery_asked');
+      if (!hasAsked) {
+        await AsyncStorage.setItem('voxnote_battery_asked', 'true');
+        Alert.alert(
+          '🔋 Enable Background Recording',
+          'To keep recording when the screen is locked, tap "Allow" on the next screen to disable battery optimization for VoxNote.\n\nThis is required on Samsung phones.',
+          [
+            {
+              text: '✅ Allow (Recommended)',
+              onPress: requestBatteryOptimizationExemption,
+            },
+            { text: 'Skip', style: 'cancel' },
+          ]
+        );
+      }
+    } catch (e) {
+      console.log('Battery check error:', e.message);
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────────
+
   const startRecording = async () => {
     try {
       const { granted } = await Audio.requestPermissionsAsync();
@@ -62,9 +107,10 @@ export const RecordingProvider = ({ children }) => {
         return false;
       }
 
-      // ── Critical: set audio mode BEFORE creating recording ──────────────
-      // interruptionModeAndroid: 1 = DO_NOT_MIX (keeps audio from being interrupted)
-      // staysActiveInBackground: true = keeps session alive when screen locks
+      // Check battery optimization on first recording
+      await checkBatteryOptimization();
+
+      // Set audio mode BEFORE creating recording
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:         true,
         playsInSilentModeIOS:       true,
@@ -75,9 +121,6 @@ export const RecordingProvider = ({ children }) => {
         playThroughEarpieceAndroid: false,
       });
 
-      // ── Use HIGH_QUALITY preset — proven to work in background on Android ─
-      // Custom settings with MPEG_4/AAC can lose background audio on some devices
-      // HIGH_QUALITY preset uses Android's MediaRecorder with proper session flags
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
@@ -85,7 +128,6 @@ export const RecordingProvider = ({ children }) => {
       recordingRef.current = recording;
       startTimeRef.current = Date.now();
 
-      // Keep CPU awake so JS timer stays accurate
       await activateKeepAwakeAsync('recording');
 
       setIsRecording(true);
@@ -126,7 +168,6 @@ export const RecordingProvider = ({ children }) => {
       setRecordingTime(finalDuration);
       setRecordingUri(uri);
 
-      // Release keep-awake and audio session
       deactivateKeepAwake('recording');
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:      false,
