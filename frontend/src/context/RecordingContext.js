@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import { Alert, AppState, Platform, Linking } from 'react-native';
-import { Audio } from 'expo-av';
+import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const RecordingContext = createContext(null);
+const audioRecorderPlayer = new AudioRecorderPlayer();
 
 export const useRecording = () => {
   const context = useContext(RecordingContext);
@@ -19,11 +20,11 @@ export const RecordingProvider = ({ children }) => {
   const [statusText,    setStatusText]    = useState('Tap to start recording');
   const [recordingUri,  setRecordingUri]  = useState(null);
 
-  const recordingRef = useRef(null);
-  const timerRef     = useRef(null);
   const startTimeRef = useRef(null);
+  const timerRef     = useRef(null);
   const appStateRef  = useRef(AppState.currentState);
   const appStateSub  = useRef(null);
+  const currentUriRef = useRef(null);
 
   // Resync timer when app comes back to foreground
   useEffect(() => {
@@ -55,26 +56,7 @@ export const RecordingProvider = ({ children }) => {
     return `${m}:${s}`;
   };
 
-  // ─── Request battery optimization exemption ───────────────────────────────
-  // Samsung One UI aggressively kills background apps — this opens the system
-  // dialog to whitelist VoxNote so recording continues when screen is locked
-  const requestBatteryOptimizationExemption = async () => {
-    if (Platform.OS !== 'android') return;
-    try {
-      await Linking.sendIntent(
-        'android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
-        [{ key: 'package', value: 'com.voxnote.app' }]
-      );
-    } catch (e) {
-      // Fallback — open app battery settings
-      try {
-        await Linking.openSettings();
-      } catch (e2) {
-        console.log('Could not open battery settings:', e2.message);
-      }
-    }
-  };
-
+  // ─── Battery optimization exemption (Samsung One UI) ─────────────────────
   const checkBatteryOptimization = async () => {
     if (Platform.OS !== 'android') return;
     try {
@@ -87,7 +69,16 @@ export const RecordingProvider = ({ children }) => {
           [
             {
               text: '✅ Allow (Recommended)',
-              onPress: requestBatteryOptimizationExemption,
+              onPress: async () => {
+                try {
+                  await Linking.sendIntent(
+                    'android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
+                    [{ key: 'package', value: 'com.voxnote.app' }]
+                  );
+                } catch (e) {
+                  await Linking.openSettings();
+                }
+              },
             },
             { text: 'Skip', style: 'cancel' },
           ]
@@ -97,37 +88,38 @@ export const RecordingProvider = ({ children }) => {
       console.log('Battery check error:', e.message);
     }
   };
-  // ─────────────────────────────────────────────────────────────────────────
 
   const startRecording = async () => {
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
-      if (!granted) {
-        Alert.alert('Permission needed', 'Please allow microphone access');
-        return false;
-      }
-
-      // Check battery optimization on first recording
+      // Check battery optimization on first use
       await checkBatteryOptimization();
 
-      // Set audio mode BEFORE creating recording
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS:         true,
-        playsInSilentModeIOS:       true,
-        staysActiveInBackground:    true,
-        interruptionModeIOS:        1,
-        shouldDuckAndroid:          false,
-        interruptionModeAndroid:    1,
-        playThroughEarpieceAndroid: false,
+      // Set output path
+      const path = Platform.select({
+        android: `${Date.now()}_recording.m4a`,
+        ios:     `${Date.now()}_recording.m4a`,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      // Start recording with react-native-audio-recorder-player
+      // This library uses Android's native MediaRecorder with proper
+      // foreground service support — works when screen is locked
+      const uri = await audioRecorderPlayer.startRecorder(path, {
+        AVFormatIDKeyIOS:                  'aac',
+        AVSampleRateKeyIOS:                44100,
+        AVNumberOfChannelsKeyIOS:          1,
+        AVEncoderAudioQualityKeyIOS:       'high',
+        AudioEncoderAndroid:               'aac',
+        AudioSourceAndroid:                'mic',
+        OutputFormatAndroid:               'mpeg_4',
+        AudioSamplingRateAndroid:          44100,
+        AudioChannelsAndroid:              1,
+        AudioEncodingBitRateAndroid:       128000,
+      });
 
-      recordingRef.current = recording;
-      startTimeRef.current = Date.now();
+      currentUriRef.current = uri;
+      startTimeRef.current  = Date.now();
 
+      // Keep screen from turning off (belt + suspenders approach)
       await activateKeepAwakeAsync('recording');
 
       setIsRecording(true);
@@ -135,12 +127,14 @@ export const RecordingProvider = ({ children }) => {
       setStatusText('Recording... speak now');
       setRecordingUri(null);
 
+      // Wall-clock timer — stays accurate even when screen is off
       timerRef.current = setInterval(() => {
         if (startTimeRef.current) {
           setRecordingTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
         }
       }, 1000);
 
+      console.log('Recording started, URI:', uri);
       return true;
 
     } catch (err) {
@@ -157,9 +151,8 @@ export const RecordingProvider = ({ children }) => {
       setStatusText('Processing your recording...');
       setIsProcessing(true);
 
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
+      const uri = await audioRecorderPlayer.stopRecorder();
+      audioRecorderPlayer.removeRecordBackListener();
 
       const finalDuration = startTimeRef.current
         ? Math.floor((Date.now() - startTimeRef.current) / 1000)
@@ -169,11 +162,8 @@ export const RecordingProvider = ({ children }) => {
       setRecordingUri(uri);
 
       deactivateKeepAwake('recording');
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS:      false,
-        staysActiveInBackground: false,
-      }).catch(() => {});
 
+      console.log('Recording stopped, URI:', uri);
       return uri;
 
     } catch (err) {
@@ -190,7 +180,8 @@ export const RecordingProvider = ({ children }) => {
     setIsRecording(false);
     setIsProcessing(false);
     setRecordingTime(0);
-    startTimeRef.current = null;
+    startTimeRef.current  = null;
+    currentUriRef.current = null;
     setStatusText('Tap to start recording');
     setRecordingUri(null);
   };
