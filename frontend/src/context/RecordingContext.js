@@ -62,6 +62,9 @@ export const RecordingProvider = ({ children }) => {
         return false;
       }
 
+      // ── Critical: set audio mode BEFORE creating recording ──────────────
+      // interruptionModeAndroid: 1 = DO_NOT_MIX (keeps audio from being interrupted)
+      // staysActiveInBackground: true = keeps session alive when screen locks
       await Audio.setAudioModeAsync({
         allowsRecordingIOS:         true,
         playsInSilentModeIOS:       true,
@@ -72,34 +75,17 @@ export const RecordingProvider = ({ children }) => {
         playThroughEarpieceAndroid: false,
       });
 
-      // High quality audio settings for best transcription accuracy
-      const { recording } = await Audio.Recording.createAsync({
-        android: {
-          extension:        '.m4a',
-          outputFormat:     Audio.AndroidOutputFormat.MPEG_4,
-          audioEncoder:     Audio.AndroidAudioEncoder.AAC,
-          sampleRate:       44100,
-          numberOfChannels: 1,   // mono — smaller file, faster upload
-          bitRate:          128000, // good quality for speech, keeps file size manageable
-        },
-        ios: {
-          extension:            '.m4a',
-          outputFormat:         Audio.IOSOutputFormat.MPEG4AAC,
-          audioQuality:         Audio.IOSAudioQuality.MAX,
-          sampleRate:           44100,
-          numberOfChannels:     1,
-          bitRate:              128000,
-          linearPCMBitDepth:    16,
-          linearPCMIsBigEndian: false,
-          linearPCMIsFloat:     false,
-        },
-        web: {},
-      });
+      // ── Use HIGH_QUALITY preset — proven to work in background on Android ─
+      // Custom settings with MPEG_4/AAC can lose background audio on some devices
+      // HIGH_QUALITY preset uses Android's MediaRecorder with proper session flags
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
 
       recordingRef.current = recording;
       startTimeRef.current = Date.now();
 
-      // Keep CPU alive so recording continues when screen locks
+      // Keep CPU awake so JS timer stays accurate
       await activateKeepAwakeAsync('recording');
 
       setIsRecording(true);

@@ -10,7 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { summarizeTranscript, chatWithTranscripts } from '../services/api';
-import { updateSpeakerNames, updateTranscriptFolder } from '../utils/storage';
+import { updateSpeakerNames, updateTranscriptFolder, updateTranscriptTitle } from '../utils/storage';
 
 const FOLDERS = ['General', 'Work', 'Personal', 'Meetings', 'Lectures'];
 const FOLDER_ICONS = {
@@ -432,6 +432,10 @@ export default function TranscriptScreen({ route }) {
   const [folderModal,   setFolderModal]   = useState(false);
   const [savingFolder,  setSavingFolder]  = useState(false);
 
+  const [currentTitle,  setCurrentTitle]  = useState(transcript.title || '');
+  const [editingTitle,  setEditingTitle]  = useState(false);
+  const [savingTitle,   setSavingTitle]   = useState(false);
+
   const flatListRef = useRef(null);
   const inputRef    = useRef(null);
 
@@ -477,6 +481,20 @@ export default function TranscriptScreen({ route }) {
       Alert.alert('Error', 'Could not move recording. Please try again.');
     }
     setSavingFolder(false);
+  };
+
+  const saveTitle = async () => {
+    const trimmed = currentTitle.trim();
+    if (!trimmed) { Alert.alert('Please enter a title'); return; }
+    setSavingTitle(true);
+    const result = await updateTranscriptTitle(transcript.id, trimmed);
+    if (result.success) {
+      setEditingTitle(false);
+      Alert.alert('✅ Title updated!');
+    } else {
+      Alert.alert('Error', 'Could not update title. Please try again.');
+    }
+    setSavingTitle(false);
   };
 
   const copyToClipboard = async () => {
@@ -980,7 +998,43 @@ export default function TranscriptScreen({ route }) {
 
       <ScrollView contentContainerStyle={styles.scroll}>
 
-        <Text selectable={true} style={styles.title}>{transcript.title}</Text>
+        {/* ── Editable title ── */}
+        {editingTitle ? (
+          <View style={styles.titleEditRow}>
+            <TextInput
+              style={styles.titleInput}
+              value={currentTitle}
+              onChangeText={setCurrentTitle}
+              autoFocus
+              maxLength={100}
+              returnKeyType="done"
+              onSubmitEditing={saveTitle}
+              placeholder="Enter recording title..."
+              placeholderTextColor="#AAA"
+            />
+            <TouchableOpacity
+              style={[styles.titleSaveBtn, savingTitle && { opacity: 0.6 }]}
+              onPress={saveTitle}
+              disabled={savingTitle}>
+              {savingTitle
+                ? <ActivityIndicator size="small" color="#FFF" />
+                : <Text style={styles.titleSaveBtnText}>✓</Text>
+              }
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.titleCancelBtn}
+              onPress={() => { setEditingTitle(false); setCurrentTitle(transcript.title); }}>
+              <Text style={styles.titleCancelBtnText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity onPress={() => setEditingTitle(true)} activeOpacity={0.7}>
+            <View style={styles.titleRow}>
+              <Text selectable={true} style={styles.title}>{currentTitle || transcript.title}</Text>
+              <Text style={styles.titleEditIcon}>✏️</Text>
+            </View>
+          </TouchableOpacity>
+        )}
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{transcript.wordCount} words  •  {formatDate(transcript.createdAt)}</Text>
           <View style={styles.langBadge}>
@@ -1367,4 +1421,18 @@ const styles = StyleSheet.create({
   sendBtnDisabled:  { backgroundColor: '#CCC' },
   sendBtnText:      { color: '#FFFFFF', fontSize: 18 },
   navBarSpacer:     { height: 20, backgroundColor: '#FFFFFF' },
+
+  // ── Editable title styles ──
+  titleRow:         { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  titleEditIcon:    { fontSize: 14, color: '#888', marginTop: 2 },
+  titleEditRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  titleInput:       { flex: 1, fontSize: 18, fontWeight: 'bold', color: '#0D3B7A',
+                      borderBottomWidth: 2, borderBottomColor: '#1A56A0',
+                      paddingVertical: 4, paddingHorizontal: 2 },
+  titleSaveBtn:     { backgroundColor: '#1A7A4A', width: 36, height: 36,
+                      borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  titleSaveBtnText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
+  titleCancelBtn:   { backgroundColor: '#EEE', width: 36, height: 36,
+                      borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  titleCancelBtnText: { color: '#666', fontSize: 16, fontWeight: 'bold' },
 });
