@@ -36,9 +36,10 @@
     },
     "plugins": [
       [
-        "expo-av",
+        "expo-audio",
         {
-          "microphonePermission": "VoxNote needs microphone access to record meetings and conversations."
+          "microphonePermission": "VoxNote needs microphone access to record meetings and conversations.",
+          "enableBackgroundRecording": true
         }
       ]
     ],
