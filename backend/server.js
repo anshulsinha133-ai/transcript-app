@@ -23,7 +23,6 @@ app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-
 // Increase server timeout for large file uploads
 app.use((req, res, next) => {
   res.setTimeout(300000); // 5 min
@@ -44,234 +43,139 @@ const upload = multer({
   fileFilter: (req, file, cb) => { cb(null, true); }
 });
 
-// ─── Template-aware system prompts (Structured JSON output) ──────────────────
+// ─── MASTER ANTI-HALLUCINATION PROMPT ────────────────────────────────────────
+// Single source of truth. All 7 templates use this.
+// Each template adds a 2-line context hint on top.
+// To update rules → edit here once, all templates update automatically.
+
+function buildMasterPrompt(contextHint) {
+  return `${contextHint}
+
+I will provide a transcript of a lecture, discussion, meeting, or conversation.
+Analyze it STRICTLY based only on the transcript content.
+
+## Critical Rules
+- Do NOT hallucinate.
+- Do NOT add facts, assumptions, interpretations, names, timelines, or context not explicitly supported by the transcript.
+- If something is unclear, state: "Not clearly stated in transcript."
+- Preserve original meaning exactly.
+- Do NOT inject external knowledge or recommendations unless explicitly requested.
+- Be concise, structured, and comprehensive.
+- Separate explicit facts from possible inference.
+- If speakers are unclear, label them as: Speaker 1, Speaker 2, etc.
+- The transcript may contain Roman-script Hindi, Marathi, or English. Always respond in clear English only.
+
+## Required Output
+Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+
+{
+  "executive_summary": {
+    "main_purpose": "One sentence describing the core purpose of this recording",
+    "core_themes": ["Theme 1", "Theme 2", "Theme 3"],
+    "major_conclusions": ["Conclusion 1", "Conclusion 2"],
+    "key_outcomes": ["Outcome 1", "Outcome 2"]
+  },
+  "detailed_summary": [
+    {
+      "topic": "Topic heading",
+      "what_was_said": "What was discussed under this topic — 2-4 sentences",
+      "speaker": "Speaker name or Not clearly stated in transcript"
+    }
+  ],
+  "key_points": [
+    { "number": 1, "key_point": "The key point or insight", "supporting_context": "What was said to support this" }
+  ],
+  "decisions_taken": [
+    { "decision": "Exact decision made", "owner": "Not specified", "context": "Context in which decision was made" }
+  ],
+  "action_items": [
+    { "action": "Task starting with a verb", "owner": "Not specified", "deadline": "Not specified", "dependency": "Not specified" }
+  ],
+  "open_questions": [
+    { "question": "Unanswered question or pending matter", "status": "Unresolved" }
+  ],
+  "risks_concerns": [
+    { "risk": "Risk or concern raised", "mentioned_by": "Not clearly stated in transcript", "context": "Context" }
+  ],
+  "important_highlights": [
+    "Impactful statement or critical observation 1",
+    "Impactful statement or critical observation 2"
+  ],
+  "quotes_worth_retaining": [
+    { "quote": "Verbatim or near-verbatim quote", "speaker": "Not clearly stated in transcript" }
+  ],
+  "missing_information": [
+    { "area": "Area with missing info (e.g. Action Items)", "issue": "What is missing (e.g. No deadline mentioned)" }
+  ],
+  "one_page_brief": {
+    "purpose": "1-2 sentences on what this recording was about",
+    "decisions": "Summary of decisions made, or None identified",
+    "actions": "Summary of action items, or None identified",
+    "risks": "Summary of risks/concerns, or None identified",
+    "pending_items": "Summary of open questions and pending matters"
+  }
+}
+
+## Final Validation (apply before responding)
+- No hallucinations — every point must trace to the transcript
+- No external assumptions
+- All outputs traceable to transcript content
+- Ambiguities clearly marked as "Not clearly stated in transcript."
+- Decisions and actions separated clearly
+- If a section has no data: use empty array [] or "None identified."
+- Return ONLY the JSON object — nothing else`;
+}
+
+// ─── TEMPLATE_PROMPTS ─────────────────────────────────────────────────────────
+// Each template adds context so GPT focuses on the right fields.
+// The 11-section structure is identical across all templates.
+
 const TEMPLATE_PROMPTS = {
 
-  meeting: `You are a professional meeting notes assistant for Indian businesses.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+  meeting: buildMasterPrompt(
+    `Context: This is a BUSINESS MEETING transcript for an Indian business.
+Focus especially on: decisions taken, action owners, deadlines, blockers, and next steps.`
+  ),
 
-Required format:
-{
-  "summary": "One-line summary of the meeting purpose and outcome",
-  "key_points": ["Important point discussed 1", "Important point 2", "Important point 3"],
-  "key_decisions": ["Decision made 1", "Decision made 2"],
-  "action_items": [
-    { "task": "Task description starting with a verb", "owner": "Person name or Unassigned", "deadline": "Date or Not mentioned" }
-  ],
-  "next_meeting_date": "Date and time or Not mentioned"
-}
+  sales: buildMasterPrompt(
+    `Context: This is a SALES CALL transcript for an Indian business.
+Focus especially on: lead details, requirements, objections raised, deal stage, and agreed next steps.`
+  ),
 
-Rules:
-- summary: one clear sentence capturing the meeting topic and main outcome
-- key_points: 3-6 most important things discussed, each as a complete sentence
-- key_decisions: every resolved outcome, agreement, or choice made. If none, return []
-- action_items: every task assigned. If no owner spoken, use "Unassigned". Start each task with a verb
-- next_meeting_date: any follow-up meeting reference. If none, return "Not mentioned"
-- Be thorough — extract ALL points, decisions and tasks from the transcript
-- Return ONLY the JSON object — nothing else`,
+  lecture: buildMasterPrompt(
+    `Context: This is a LECTURE or CLASS transcript.
+Focus especially on: concepts taught, definitions given, key examples, study-worthy points, and any assignments mentioned.`
+  ),
 
-  sales: `You are a sales call analyst for Indian businesses.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+  doctor: buildMasterPrompt(
+    `Context: This is a DOCTOR-PATIENT consultation transcript.
+Focus especially on: patient complaint, symptoms, diagnosis, prescription details, tests ordered, follow-up date.`
+  ),
 
-Required format:
-{
-  "summary": "One-line summary of the call outcome",
-  "lead_name": "Full name and company of the prospect, or Not mentioned",
-  "requirements": ["Requirement or pain point 1", "Requirement 2", "Requirement 3"],
-  "objections": ["Objection 1", "Objection 2"],
-  "next_steps": ["Next step 1", "Next step 2"],
-  "deal_stage": "Stage: Discovery / Demo Scheduled / Proposal Sent / Negotiation / Closed / Not clear"
-}
+  legal: buildMasterPrompt(
+    `Context: This is a LEGAL DISCUSSION, client meeting, or court-related transcript for an Indian law practice.
+Focus especially on: case facts, legal arguments, documents needed, deadlines, next hearing date.`
+  ),
 
-Rules:
-- lead_name: extract from introduction or how they are addressed
-- requirements: all pain points, needs, goals expressed by the prospect — be thorough
-- objections: pricing concerns, competitor mentions, timing issues, hesitations, doubts
-- next_steps: every agreed follow-up action — demo, proposal, callback date, email to send
-- deal_stage: assess from context which stage this deal is at
-- If a field has no data, return []
-- Return ONLY the JSON object — nothing else`,
+  interview: buildMasterPrompt(
+    `Context: This is a JOB INTERVIEW transcript for an Indian business.
+Focus especially on: candidate background, key answers given, strengths observed, concerns raised, hiring recommendation.`
+  ),
 
-  lecture: `You are a thorough academic notes assistant.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
+  other: buildMasterPrompt(
+    `Context: This is a general conversation or discussion transcript.
+Extract all structured information as faithfully as possible from the transcript.`
+  ),
 
-Required format:
-{
-  "summary": "One-line overview of the lecture topic and scope",
-  "key_concepts": ["Concept 1 with brief explanation", "Concept 2 with brief explanation"],
-  "definitions": [
-    { "term": "Term", "definition": "Definition as explained in the lecture" }
-  ],
-  "important_points": ["Important fact or point 1", "Important fact 2"],
-  "study_questions": ["Question 1?", "Question 2?", "Question 3?", "Question 4?", "Question 5?"],
-  "assignments": ["Assignment or deadline mentioned, or return empty array if none"]
-}
+  auto: buildMasterPrompt(
+    `Context: This is a general conversation or discussion transcript.
+Extract all structured information as faithfully as possible from the transcript.`
+  ),
 
-Rules:
-- key_concepts: 4-8 core ideas, each with a short explanation based on the lecture
-- definitions: only terms explicitly defined during the lecture — be thorough
-- important_points: facts, statistics, examples mentioned that students should remember
-- study_questions: generate 5 strong revision questions covering the main topics
-- assignments: any homework, reading, or deadline mentioned by the lecturer
-- If a field has no data, return []
-- Return ONLY the JSON object — nothing else`,
-
-  doctor: `You are a medical consultation notes assistant.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
-
-Required format:
-{
-  "summary": "One-line summary of the consultation",
-  "patient_complaint": "Chief complaint, all symptoms described, severity, and duration if mentioned",
-  "diagnosis": "Condition identified or suspected by the doctor, or Not mentioned",
-  "prescription": [
-    { "medicine": "Medicine name", "dosage": "Dosage amount", "frequency": "How often", "duration": "How long" }
-  ],
-  "tests_ordered": ["Test 1", "Test 2"],
-  "advice": ["Lifestyle advice or instruction 1", "Advice 2"],
-  "followup_date": "Next appointment or re-visit instruction, or Not mentioned"
-}
-
-Rules:
-- patient_complaint: capture ALL symptoms, their severity, and duration
-- diagnosis: exact condition named by doctor, or "Under investigation" if tests ordered
-- prescription: each medicine as separate object; use "Not specified" for missing fields
-- tests_ordered: blood tests, scans, X-rays etc. mentioned. Return [] if none
-- advice: diet, rest, exercise, lifestyle changes, restrictions mentioned
-- followup_date: next checkup, test result review, or re-visit date
-- Return ONLY the JSON object — nothing else`,
-
-  legal: `You are a legal consultation notes assistant for Indian law practices.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
-
-Required format:
-{
-  "summary": "One-line summary of the legal matter discussed",
-  "client_details": "Client name, case reference, matter type — or Not mentioned",
-  "case_summary": "Core legal matter, current status, and key facts — 2-3 sentences",
-  "key_points": ["Key legal point or fact discussed 1", "Key point 2", "Key point 3"],
-  "action_items": [
-    { "task": "Task description", "owner": "Lawyer or Client", "deadline": "Date or Not mentioned" }
-  ],
-  "next_hearing_date": "Scheduled hearing, court date, or filing deadline — or Not mentioned"
-}
-
-Rules:
-- client_details: extract name from how they are addressed or introduced
-- case_summary: 2-3 sentences covering the legal issue, jurisdiction if mentioned, current stage
-- key_points: important legal arguments, facts, evidence, or strategy discussed
-- action_items: documents to gather, filings due, calls to make, research needed
-- next_hearing_date: any court date, deadline, or scheduled appointment
-- Return ONLY the JSON object — nothing else`,
-
-  interview: `You are a detailed interview assessment assistant for Indian businesses.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
-
-Required format:
-{
-  "summary": "One-line summary of the interview",
-  "candidate_name": "Candidate's full name, or Not mentioned",
-  "role": "Role being interviewed for, or Not mentioned",
-  "key_answers": ["Notable answer or example given by candidate 1", "Notable answer 2", "Notable answer 3"],
-  "evaluation": {
-    "strengths": ["Strength 1", "Strength 2", "Strength 3"],
-    "concerns": ["Concern or red flag 1", "Concern 2"]
-  },
-  "cultural_fit": "Assessment of cultural fit and communication style based on the interview",
-  "decision": "Recommended outcome: Shortlist / Reject / Hold / Move to next round — with one-line reason"
-}
-
-Rules:
-- candidate_name: from introduction or how interviewer addresses them
-- role: the position being interviewed for
-- key_answers: 3-5 specific examples, stories, or responses that stand out (positive or negative)
-- evaluation.strengths: demonstrated skills, experiences, cultural fit signals, strong moments
-- evaluation.concerns: hesitations, gaps, inconsistencies, red flags observed
-- cultural_fit: communication style, attitude, energy, team fit signals
-- decision: clear recommendation with brief reasoning
-- If a field has no data, return []
-- Return ONLY the JSON object — nothing else`,
-
-  other: `You are a detailed notes assistant for Indian businesses.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
-
-Required format:
-{
-  "summary": "One-line summary of the recording",
-  "key_points": ["Key point discussed 1", "Key point 2", "Key point 3", "Key point 4"],
-  "action_items": [
-    { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
-  ],
-  "decisions": ["Decision or conclusion 1", "Decision 2"],
-  "follow_up": ["Follow-up item 1", "Follow-up item 2"]
-}
-
-Rules:
-- key_points: 4-8 most important things discussed, each as a complete sentence
-- action_items: any tasks or follow-ups mentioned; return [] if none
-- decisions: any outcomes, agreements, or conclusions reached; return [] if none
-- follow_up: things to check, verify, or revisit later
-- Return ONLY the JSON object — nothing else`,
-
-  auto: `You are a detailed notes assistant for Indian businesses.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
-
-Required format:
-{
-  "summary": "One-line summary of the recording",
-  "key_points": ["Key point discussed 1", "Key point 2", "Key point 3", "Key point 4"],
-  "action_items": [
-    { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
-  ],
-  "decisions": ["Decision or conclusion 1", "Decision 2"],
-  "follow_up": ["Follow-up item 1", "Follow-up item 2"]
-}
-
-Rules:
-- key_points: 4-8 most important things discussed, each as a complete sentence
-- action_items: any tasks or follow-ups mentioned; return [] if none
-- decisions: any outcomes, agreements, or conclusions reached; return [] if none
-- follow_up: things to check, verify, or revisit later
-- Return ONLY the JSON object — nothing else`,
-
-  default: `You are a detailed notes assistant for Indian businesses.
-The transcript may contain Roman-script Hindi, Marathi, or English.
-Always respond in clear English only.
-Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
-
-Required format:
-{
-  "summary": "One-line summary of the recording",
-  "key_points": ["Key point discussed 1", "Key point 2", "Key point 3", "Key point 4"],
-  "action_items": [
-    { "task": "Task description", "owner": "Person or Unassigned", "deadline": "Date or Not mentioned" }
-  ],
-  "decisions": ["Decision or conclusion 1", "Decision 2"],
-  "follow_up": ["Follow-up item 1", "Follow-up item 2"]
-}
-
-Rules:
-- key_points: 4-8 most important things discussed, each as a complete sentence
-- action_items: any tasks or follow-ups mentioned; return [] if none
-- decisions: any outcomes, agreements, or conclusions reached; return [] if none
-- follow_up: things to check, verify, or revisit later
-- Return ONLY the JSON object — nothing else`,
+  default: buildMasterPrompt(
+    `Context: This is a general conversation or discussion transcript.
+Extract all structured information as faithfully as possible from the transcript.`
+  ),
 };
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -310,7 +214,7 @@ app.get('/realtime-token', async (req, res) => {
   }
 });
 
-// ─── Summarize route (template-aware, structured JSON) ───────────────────────
+// ─── Summarize route (template-aware, 11-section structured JSON) ─────────────
 app.post('/summarize', async (req, res) => {
   const { transcript, mode } = req.body;
   if (!transcript) return res.status(400).json({ error: 'No transcript provided' });
@@ -320,12 +224,13 @@ app.post('/summarize', async (req, res) => {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model:       'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: 'Extract structured notes from this transcript:\n\n' + transcript }
       ],
-      max_tokens: 1000,
+      max_tokens:  4000,   // ← increased from 1000 — new 11-section output needs more tokens
+      temperature: 0.1,    // ← low temperature for factual accuracy, prevents hallucination
     });
 
     const raw   = completion.choices[0].message.content.trim();
@@ -340,7 +245,7 @@ app.post('/summarize', async (req, res) => {
 
     res.json({
       success:    true,
-      summary:    clean,   // store this string in Supabase
+      summary:    clean,   // store this string in Supabase auto_summary column
       structured: parsed,  // parsed object for frontend direct use
     });
 
@@ -402,7 +307,7 @@ app.post('/generate-email', async (req, res) => {
     let actionItemsText = '';
     if (actionItems && actionItems.length > 0) {
       actionItemsText = actionItems.map((item, i) => {
-        let line = `${i + 1}. ${item.task}`;
+        let line = `${i + 1}. ${item.task || item.action}`;
         if (item.owner)    line += ` (Owner: ${item.owner})`;
         if (item.deadline) line += ` (Due: ${item.deadline})`;
         return line;
@@ -493,7 +398,7 @@ app.post('/share/revoke', async (req, res) => {
   }
 });
 
-// ─── SHARE: Public read-only page ───
+// ─── SHARE: Public read-only page (updated for 11-section summary) ────────────
 app.get('/share/:token', async (req, res) => {
   try {
     const { token } = req.params;
@@ -516,128 +421,161 @@ app.get('/share/:token', async (req, res) => {
     const duration = data.duration ? Math.round(data.duration / 60) + ' min' : 'N/A';
     const words    = data.word_count || 0;
 
-    // ─── Parse structured summary if JSON ───
+    // ─── Parse structured summary ─────────────────────────────────────────────
     let summaryHTML = '';
     if (data.auto_summary) {
-      let structuredSummary = null;
+      let s = null;
       try {
         const clean = data.auto_summary.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
-        structuredSummary = JSON.parse(clean);
-      } catch { /* plain text summary */ }
+        s = JSON.parse(clean);
+      } catch { /* plain text fallback below */ }
 
-      if (structuredSummary) {
-        const mode = data.mode || 'default';
-        const TEMPLATE_LABELS = {
-          meeting:   '🤝 Meeting Notes',
-          sales:     '📞 Sales Call',
-          lecture:   '🎓 Lecture Notes',
-          doctor:    '🏥 Doctor Notes',
-          legal:     '⚖️ Legal Notes',
-          interview: '👤 Interview Notes',
-          default:   '📝 Notes',
+      if (s && s.executive_summary) {
+        // ── NEW 11-section format ─────────────────────────────────────────────
+        const arr  = (a) => Array.isArray(a) && a.length > 0;
+        const val  = (v) => v && v !== 'Not specified' && v !== 'None identified.' && v !== 'None identified';
+        const row  = (label, value) => val(value) ? `<div style="margin-bottom:10px;"><span style="font-weight:700;color:#555;font-size:11px;text-transform:uppercase;letter-spacing:0.05em;">${label}</span><div style="margin-top:4px;font-size:14px;color:#333;line-height:1.6;">${value}</div></div>` : '';
+        const list = (items) => arr(items) ? `<ul style="margin:4px 0 0 0;padding-left:18px;">${items.map(i=>`<li style="margin-bottom:4px;font-size:13px;color:#333;line-height:1.5;">${i}</li>`).join('')}</ul>` : '<p style="color:#aaa;font-size:13px;font-style:italic;">None identified.</p>';
+        const tag  = (color, bg, text) => `<span style="background:${bg};color:${color};padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600;">${text}</span>`;
+
+        const makeTable = (headers, rows, emptyMsg='None identified.') => {
+          if (!arr(rows)) return `<p style="color:#aaa;font-size:13px;font-style:italic;">${emptyMsg}</p>`;
+          const th = headers.map(h=>`<th style="padding:8px 10px;background:#1A56A0;color:#fff;text-align:left;font-size:12px;">${h}</th>`).join('');
+          const tr = rows.map((r,i)=>`<tr style="background:${i%2===0?'#fff':'#F5F8FC'};">${Object.values(r).map(v=>`<td style="padding:8px 10px;border-bottom:1px solid #E8EEF5;font-size:13px;color:#333;">${v||'Not specified'}</td>`).join('')}</tr>`).join('');
+          return `<table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden;""><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
         };
-        let fieldsHTML = '';
 
-        if (structuredSummary.summary) {
-          fieldsHTML += `<div style="font-style:italic;color:#555;margin-bottom:12px;font-size:14px;">${structuredSummary.summary}</div>`;
+        const section = (title, content) => `
+          <div style="margin-bottom:20px;">
+            <div style="font-size:14px;font-weight:700;color:#0D3B7A;padding:8px 0 6px;border-bottom:2px solid #1A56A0;margin-bottom:12px;">${title}</div>
+            ${content}
+          </div>`;
+
+        let html11 = '';
+
+        // 1. Executive Summary
+        const es = s.executive_summary;
+        html11 += section('1. Executive Summary',
+          row('Main Purpose', es?.main_purpose) +
+          row('Core Themes', arr(es?.core_themes) ? es.core_themes.join(' &bull; ') : '') +
+          (arr(es?.major_conclusions) ? `<div style="margin-bottom:10px;"><span style="font-weight:700;color:#555;font-size:11px;text-transform:uppercase;">Major Conclusions</span>${list(es.major_conclusions)}</div>` : '') +
+          (arr(es?.key_outcomes)      ? `<div style="margin-bottom:10px;"><span style="font-weight:700;color:#555;font-size:11px;text-transform:uppercase;">Key Outcomes</span>${list(es.key_outcomes)}</div>` : '')
+        );
+
+        // 2. Detailed Summary
+        if (arr(s.detailed_summary)) {
+          html11 += section('2. Detailed Summary',
+            s.detailed_summary.map(item => `
+              <div style="border-left:3px solid #1A56A0;padding-left:12px;margin-bottom:14px;">
+                <div style="font-weight:700;color:#1A56A0;font-size:13px;margin-bottom:2px;">${item.topic || ''}</div>
+                ${val(item.speaker) ? `<div style="font-size:11px;color:#7B1FA2;margin-bottom:4px;">${item.speaker}</div>` : ''}
+                <div style="font-size:13px;color:#333;line-height:1.6;">${item.what_was_said || ''}</div>
+              </div>`).join('')
+          );
         }
-        // Meeting
-        if (structuredSummary.key_decisions?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#1A56A0;margin:10px 0 6px;">✅ Key Decisions</div>`;
-          fieldsHTML += structuredSummary.key_decisions.map(d => `<div style="padding:4px 0 4px 12px;border-left:3px solid #1A56A0;margin-bottom:4px;font-size:13px;">${d}</div>`).join('');
+
+        // 3. Key Points
+        if (arr(s.key_points)) {
+          html11 += section('3. Key Points / Core Insights',
+            makeTable(['#','Key Point','Supporting Context'],
+              s.key_points.map(k=>({'#':k.number,'Key Point':k.key_point,'Supporting Context':k.supporting_context})))
+          );
         }
-        if (structuredSummary.next_meeting_date && structuredSummary.next_meeting_date !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-top:10px;padding:8px 12px;background:#EFF6FF;border-radius:8px;font-size:13px;"><strong>📅 Next Meeting:</strong> ${structuredSummary.next_meeting_date}</div>`;
-        }
-        // Sales
-        if (structuredSummary.lead_name && structuredSummary.lead_name !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-bottom:8px;padding:8px 12px;background:#ECFDF5;border-radius:8px;font-size:13px;"><strong>🏢 Lead:</strong> ${structuredSummary.lead_name}</div>`;
-        }
-        if (structuredSummary.requirements?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#059669;margin:10px 0 6px;">🎯 Requirements</div>`;
-          fieldsHTML += structuredSummary.requirements.map(r => `<div style="padding:4px 0 4px 12px;border-left:3px solid #059669;margin-bottom:4px;font-size:13px;">${r}</div>`).join('');
-        }
-        if (structuredSummary.objections?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#D97706;margin:10px 0 6px;">⚠️ Objections</div>`;
-          fieldsHTML += structuredSummary.objections.map(o => `<div style="padding:4px 0 4px 12px;border-left:3px solid #D97706;margin-bottom:4px;font-size:13px;">${o}</div>`).join('');
-        }
-        if (structuredSummary.next_steps?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#059669;margin:10px 0 6px;">🚀 Next Steps</div>`;
-          fieldsHTML += structuredSummary.next_steps.map(s => `<div style="padding:4px 0 4px 12px;border-left:3px solid #059669;margin-bottom:4px;font-size:13px;">${s}</div>`).join('');
-        }
-        // Lecture
-        if (structuredSummary.key_concepts?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#7C3AED;margin:10px 0 6px;">💡 Key Concepts</div>`;
-          fieldsHTML += structuredSummary.key_concepts.map(c => `<div style="padding:4px 0 4px 12px;border-left:3px solid #7C3AED;margin-bottom:4px;font-size:13px;">${c}</div>`).join('');
-        }
-        if (structuredSummary.definitions?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#7C3AED;margin:10px 0 6px;">📖 Definitions</div>`;
-          fieldsHTML += structuredSummary.definitions.map(d => `<div style="padding:8px 12px;background:#F5F3FF;border-radius:6px;margin-bottom:6px;font-size:13px;"><strong>${d.term}:</strong> ${d.definition}</div>`).join('');
-        }
-        if (structuredSummary.study_questions?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#7C3AED;margin:10px 0 6px;">❓ Study Questions</div>`;
-          fieldsHTML += structuredSummary.study_questions.map((q, i) => `<div style="padding:6px 12px;margin-bottom:4px;font-size:13px;"><strong>Q${i+1}:</strong> ${q}</div>`).join('');
-        }
-        // Doctor
-        if (structuredSummary.patient_complaint) {
-          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FEF2F2;border-radius:8px;font-size:13px;"><strong>🩺 Complaint:</strong> ${structuredSummary.patient_complaint}</div>`;
-        }
-        if (structuredSummary.diagnosis && structuredSummary.diagnosis !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FEF2F2;border-radius:8px;font-size:13px;"><strong>🔬 Diagnosis:</strong> ${structuredSummary.diagnosis}</div>`;
-        }
-        if (structuredSummary.prescription?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#DC2626;margin:10px 0 6px;">💊 Prescription</div>`;
-          fieldsHTML += structuredSummary.prescription.map(p => `<div style="padding:8px 12px;background:#FFF5F5;border-radius:6px;margin-bottom:6px;font-size:13px;"><strong>${p.medicine}</strong> — ${p.dosage}, ${p.frequency}, ${p.duration}</div>`).join('');
-        }
-        if (structuredSummary.followup_date && structuredSummary.followup_date !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-top:10px;padding:8px 12px;background:#FEF2F2;border-radius:8px;font-size:13px;"><strong>📅 Follow-up:</strong> ${structuredSummary.followup_date}</div>`;
-        }
-        // Legal
-        if (structuredSummary.client_details && structuredSummary.client_details !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FFFBEB;border-radius:8px;font-size:13px;"><strong>👤 Client:</strong> ${structuredSummary.client_details}</div>`;
-        }
-        if (structuredSummary.case_summary) {
-          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#FFFBEB;border-radius:8px;font-size:13px;"><strong>📄 Case:</strong> ${structuredSummary.case_summary}</div>`;
-        }
-        if (structuredSummary.next_hearing_date && structuredSummary.next_hearing_date !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-top:10px;padding:8px 12px;background:#FFFBEB;border-radius:8px;font-size:13px;"><strong>⚖️ Next Hearing:</strong> ${structuredSummary.next_hearing_date}</div>`;
-        }
-        // Interview
-        if (structuredSummary.candidate_name && structuredSummary.candidate_name !== 'Not mentioned') {
-          fieldsHTML += `<div style="margin-bottom:8px;padding:10px 12px;background:#F0F9FF;border-radius:8px;font-size:13px;"><strong>👤 Candidate:</strong> ${structuredSummary.candidate_name}</div>`;
-        }
-        if (structuredSummary.key_answers?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#0369A1;margin:10px 0 6px;">💬 Key Answers</div>`;
-          fieldsHTML += structuredSummary.key_answers.map(a => `<div style="padding:4px 0 4px 12px;border-left:3px solid #0369A1;margin-bottom:4px;font-size:13px;">${a}</div>`).join('');
-        }
-        if (structuredSummary.evaluation?.strengths?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#059669;margin:10px 0 6px;">✅ Strengths</div>`;
-          fieldsHTML += structuredSummary.evaluation.strengths.map(s => `<div style="padding:4px 0 4px 12px;border-left:3px solid #059669;margin-bottom:4px;font-size:13px;">${s}</div>`).join('');
-        }
-        if (structuredSummary.evaluation?.concerns?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#DC2626;margin:10px 0 6px;">⚠️ Concerns</div>`;
-          fieldsHTML += structuredSummary.evaluation.concerns.map(c => `<div style="padding:4px 0 4px 12px;border-left:3px solid #DC2626;margin-bottom:4px;font-size:13px;">${c}</div>`).join('');
-        }
-        if (structuredSummary.decision) {
-          fieldsHTML += `<div style="margin-top:10px;padding:10px 12px;background:#F0F9FF;border-radius:8px;font-size:13px;"><strong>🎯 Decision:</strong> ${structuredSummary.decision}</div>`;
-        }
-        // Default
-        if (structuredSummary.key_points?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#374151;margin:10px 0 6px;">💡 Key Points</div>`;
-          fieldsHTML += structuredSummary.key_points.map(p => `<div style="padding:4px 0 4px 12px;border-left:3px solid #374151;margin-bottom:4px;font-size:13px;">${p}</div>`).join('');
-        }
-        if (structuredSummary.decisions?.length > 0) {
-          fieldsHTML += `<div style="font-weight:700;color:#374151;margin:10px 0 6px;">✅ Decisions</div>`;
-          fieldsHTML += structuredSummary.decisions.map(d => `<div style="padding:4px 0 4px 12px;border-left:3px solid #374151;margin-bottom:4px;font-size:13px;">${d}</div>`).join('');
+
+        // 4. Decisions
+        html11 += section('4. Decisions Taken',
+          arr(s.decisions_taken)
+            ? makeTable(['Decision','Owner','Context'], s.decisions_taken)
+            : '<p style="color:#aaa;font-size:13px;font-style:italic;">No explicit decisions identified.</p>'
+        );
+
+        // 5. Action Items
+        html11 += section('5. Action Items / Follow-Up Tasks',
+          arr(s.action_items)
+            ? makeTable(['Action Item','Owner','Deadline','Dependency'],
+                s.action_items.map(a=>({'Action Item':a.action,'Owner':a.owner,'Deadline':a.deadline,'Dependency':a.dependency})))
+            : '<p style="color:#aaa;font-size:13px;font-style:italic;">No action items identified.</p>'
+        );
+
+        // 6. Open Questions
+        html11 += section('6. Open Questions / Unresolved Issues',
+          arr(s.open_questions)
+            ? `<ul style="padding-left:18px;">${s.open_questions.map(q=>`<li style="margin-bottom:6px;font-size:13px;color:#333;">${q.question} <span style="color:#aaa;font-size:11px;">(${q.status})</span></li>`).join('')}</ul>`
+            : '<p style="color:#aaa;font-size:13px;font-style:italic;">None identified.</p>'
+        );
+
+        // 7. Risks
+        html11 += section('7. Risks / Concerns Mentioned',
+          arr(s.risks_concerns)
+            ? makeTable(['Risk / Concern','Mentioned By','Context'], s.risks_concerns.map(r=>({'Risk / Concern':r.risk,'Mentioned By':r.mentioned_by,'Context':r.context})))
+            : '<p style="color:#aaa;font-size:13px;font-style:italic;">None identified.</p>'
+        );
+
+        // 8. Highlights
+        html11 += section('8. Important Highlights / Noteworthy Statements', list(s.important_highlights));
+
+        // 9. Quotes
+        html11 += section('9. Quotes Worth Retaining',
+          arr(s.quotes_worth_retaining)
+            ? s.quotes_worth_retaining.map(q=>`
+                <div style="border-left:4px solid #7B1FA2;background:#F3E5F5;padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:10px;">
+                  <div style="font-size:13px;color:#4A148C;font-style:italic;line-height:1.6;">"${q.quote}"</div>
+                  <div style="font-size:11px;color:#7B1FA2;margin-top:4px;">— ${q.speaker}</div>
+                </div>`).join('')
+            : '<p style="color:#aaa;font-size:13px;font-style:italic;">No notable quotes identified.</p>'
+        );
+
+        // 10. Missing Information
+        html11 += section('10. Missing Information / Ambiguities',
+          arr(s.missing_information)
+            ? `<ul style="padding-left:18px;">${s.missing_information.map(m=>`<li style="margin-bottom:6px;font-size:13px;color:#333;"><strong>${m.area}:</strong> ${m.issue}</li>`).join('')}</ul>`
+            : '<p style="color:#aaa;font-size:13px;font-style:italic;">None identified.</p>'
+        );
+
+        // 11. One-Page Brief
+        if (s.one_page_brief) {
+          const b = s.one_page_brief;
+          html11 += section('11. One-Page Condensed Brief',
+            `<div style="background:#EFF6FF;border-radius:8px;padding:14px;border:1px solid #BFDBFE;">
+              <table style="width:100%;border-collapse:collapse;">
+                ${[['Purpose',b.purpose],['Decisions',b.decisions],['Actions',b.actions],['Risks',b.risks],['Pending Items',b.pending_items]]
+                  .map(([k,v])=>`<tr><th style="padding:8px 10px;text-align:left;font-size:12px;color:#1A56A0;width:22%;white-space:nowrap;">${k}</th><td style="padding:8px 10px;font-size:13px;color:#333;border-bottom:1px solid #DBEAFE;">${v||'None identified.'}</td></tr>`).join('')}
+              </table>
+            </div>`
+          );
         }
 
         summaryHTML = `
           <div class="section">
-            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 ${TEMPLATE_LABELS[mode] || 'AI Notes'}</div>
+            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Notes</div>
+            <div style="background:#FAFAFA;border:1px solid #E8EEF5;border-radius:10px;padding:20px;">
+              ${html11}
+            </div>
+          </div>`;
+
+      } else if (s) {
+        // ── OLD format: render whatever fields exist (backward compat) ─────────
+        let fieldsHTML = '';
+        if (s.summary) fieldsHTML += `<div style="font-style:italic;color:#555;margin-bottom:12px;font-size:14px;">${s.summary}</div>`;
+        if (s.key_decisions?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#1A56A0;margin:10px 0 6px;">✅ Key Decisions</div>`;
+          fieldsHTML += s.key_decisions.map(d=>`<div style="padding:4px 0 4px 12px;border-left:3px solid #1A56A0;margin-bottom:4px;font-size:13px;">${d}</div>`).join('');
+        }
+        if (s.key_points?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#374151;margin:10px 0 6px;">💡 Key Points</div>`;
+          fieldsHTML += s.key_points.map(p=>`<div style="padding:4px 0 4px 12px;border-left:3px solid #374151;margin-bottom:4px;font-size:13px;">${p}</div>`).join('');
+        }
+        if (s.action_items?.length > 0) {
+          fieldsHTML += `<div style="font-weight:700;color:#E65100;margin:10px 0 6px;">🎯 Action Items</div>`;
+          fieldsHTML += s.action_items.map(a=>`<div style="padding:4px 0 4px 12px;border-left:3px solid #E65100;margin-bottom:4px;font-size:13px;"><strong>${a.task}</strong>${a.owner?' — '+a.owner:''}${a.deadline?' ('+a.deadline+')':''}</div>`).join('');
+        }
+        summaryHTML = `
+          <div class="section">
+            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Notes</div>
             <div style="background:#F0FAF4;padding:16px;border-radius:8px;">${fieldsHTML}</div>
           </div>`;
       } else {
-        // Plain text fallback
+        // ── Plain text fallback ───────────────────────────────────────────────
         summaryHTML = `
           <div class="section">
             <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
@@ -646,12 +584,13 @@ app.get('/share/:token', async (req, res) => {
       }
     }
 
+    // ─── Action items section ─────────────────────────────────────────────────
     let actionHTML = '';
     if (data.action_items?.length > 0) {
       const rows = data.action_items.map((item, i) => `
         <tr>
           <td style="padding:10px;border-bottom:1px solid #FFE0B2;font-weight:600;color:#E65100;">${i + 1}</td>
-          <td style="padding:10px;border-bottom:1px solid #FFE0B2;">${item.task}</td>
+          <td style="padding:10px;border-bottom:1px solid #FFE0B2;">${item.task || item.action || ''}</td>
           <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
           <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
         </tr>`).join('');
@@ -670,6 +609,7 @@ app.get('/share/:token', async (req, res) => {
         </div>`;
     }
 
+    // ─── Transcript section ───────────────────────────────────────────────────
     const speakerColors = ['#1A56A0','#1A7A4A','#C85A00','#8B1AAF','#C0392B','#0097A7','#795548','#E91E63'];
     const speakerBG     = ['#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE','#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'];
 
@@ -681,7 +621,7 @@ app.get('/share/:token', async (req, res) => {
       };
       const utterancesHTML = data.utterances.map(u => {
         const idx   = getSpeakerIdx(u.speaker);
-        const start = u.start ? `${Math.floor(u.start/60000).toString().padStart(2,'0')}:${Math.floor((u.start%60000)/1000).toString().padStart(2,'00')}` : '';
+        const start = u.start ? `${Math.floor(u.start/60000).toString().padStart(2,'0')}:${Math.floor((u.start%60000)/1000).toString().padStart(2,'0')}` : '';
         const end   = u.end   ? `${Math.floor(u.end/60000).toString().padStart(2,'0')}:${Math.floor((u.end%60000)/1000).toString().padStart(2,'0')}` : '';
         return `
           <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
@@ -780,17 +720,25 @@ Rules:
   }
 };
 
+// ─── generateSummary: Updated for 11-section prompt ──────────────────────────
+// Key changes vs old version:
+//   1. max_tokens 1000 → 4000  (11-section JSON needs more output tokens)
+//   2. temperature 0.1          (factual accuracy, prevents hallucination)
+//   3. truncation 8000 → 12000  (pass more transcript context to GPT)
+//   4. Returns full JSON string to store in Supabase auto_summary column
+
 const generateSummary = async (text, mode) => {
   try {
-    const truncated    = text.length > 8000 ? text.substring(0, 8000) + '...' : text;
+    const truncated    = text.length > 12000 ? text.substring(0, 12000) + '...' : text;
     const systemPrompt = TEMPLATE_PROMPTS[mode] || TEMPLATE_PROMPTS.default;
     const completion   = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model:       'gpt-4o-mini',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: 'Extract structured notes from this transcript:\n\n' + truncated }
       ],
-      max_tokens: 1000,
+      max_tokens:  4000,   // ← was 1000
+      temperature: 0.1,    // ← new: keeps GPT factual
     });
 
     const raw   = completion.choices[0].message.content.trim();
@@ -798,7 +746,7 @@ const generateSummary = async (text, mode) => {
 
     try {
       JSON.parse(clean);
-      return clean; // valid JSON string — store in Supabase
+      return clean; // valid JSON string — store in Supabase auto_summary column
     } catch {
       console.warn('generateSummary: GPT returned non-JSON, storing as plain text');
       return raw;
@@ -808,6 +756,7 @@ const generateSummary = async (text, mode) => {
     return null;
   }
 };
+// ─────────────────────────────────────────────────────────────────────────────
 
 const extractActionItems = async (text) => {
   try {
@@ -1080,6 +1029,7 @@ app.post('/webhook/assemblyai', async (req, res) => {
         .eq('id', transcript_id);
       return;
     }
+
     console.log('Processing transcript (webhook)...');
     const result = await processTranscript(transcript); // webhook has no mode — uses default
 
@@ -1123,7 +1073,6 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
       await supabase.from('transcription_jobs')
         .update({ status: 'error' })
         .eq('id', jobId);
-      console.error('AssemblyAI error for job', jobId, ':', transcript.error);
       return res.json({ success: false, status: 'error', error: transcript.error });
     }
 
@@ -1210,30 +1159,25 @@ app.post('/transcribe-speakers', upload.single('audio'), async (req, res) => {
   }
 });
 
-
 // ─── Razorpay: Create order ───────────────────────────────────────────────────
 app.post('/create-order', async (req, res) => {
   try {
     const { amount } = req.body;
     if (!amount) return res.status(400).json({ success: false, error: 'Amount required' });
 
-    // Generate a unique order ID
     const orderId = 'order_' + crypto.randomBytes(12).toString('hex');
 
-    // Store order in Supabase for verification later
     const { error } = await supabase
       .from('orders')
       .insert([{
-        order_id:  orderId,
-        amount:    amount,
-        status:    'created',
+        order_id:   orderId,
+        amount:     amount,
+        status:     'created',
         created_at: new Date().toISOString(),
       }])
       .select()
       .single();
 
-    // If orders table doesn't exist yet, still return success
-    // (orders table creation is optional for basic flow)
     if (error) {
       console.warn('Orders table insert failed (table may not exist):', error.message);
     }
@@ -1246,7 +1190,6 @@ app.post('/create-order', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-// ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Razorpay: Verify payment ─────────────────────────────────────────────────
 app.post('/verify-payment', async (req, res) => {
@@ -1256,14 +1199,12 @@ app.post('/verify-payment', async (req, res) => {
 
     console.log('Verifying payment for order:', orderId, 'payment:', paymentId);
 
-    // Update order status if table exists
     await supabase
       .from('orders')
       .update({ status: 'paid', payment_id: paymentId, paid_at: new Date().toISOString() })
       .eq('order_id', orderId)
-      .catch(() => {}); // ignore if table doesn't exist
+      .catch(() => {});
 
-    // Return success — pro activation is handled on the frontend
     res.json({ success: true, orderId, message: 'Payment verified' });
 
   } catch (err) {
@@ -1271,7 +1212,6 @@ app.post('/verify-payment', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-// ─────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`VoxNote server running on port ${PORT}`);
