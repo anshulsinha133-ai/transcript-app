@@ -6,6 +6,7 @@ const fs         = require('fs');
 const crypto     = require('crypto');
 const OpenAI     = require('openai');
 const { AssemblyAI } = require('assemblyai');
+const { SarvamAI }   = require('sarvamai');          // ← NEW: Sarvam SDK
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
@@ -13,6 +14,9 @@ const app    = express();
 const PORT   = process.env.PORT || 3000;
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
+
+// ─── Sarvam client (Indian language transcription + translation) ──────────────
+const sarvam = new SarvamAI({ apiSubscriptionKey: process.env.SARVAM_API_KEY });
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -691,8 +695,64 @@ app.get('/share/:token', async (req, res) => {
   }
 });
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// ─── SARVAM: Language code map ────────────────────────────────────────────────
+// Maps the short language code the app sends (e.g. 'hi') to Sarvam's BCP-47 format
+const SARVAM_LANG_MAP = {
+  'hi': 'hi-IN',  // Hindi
+  'mr': 'mr-IN',  // Marathi
+  'ta': 'ta-IN',  // Tamil
+  'te': 'te-IN',  // Telugu
+  'kn': 'kn-IN',  // Kannada
+  'ml': 'ml-IN',  // Malayalam
+  'bn': 'bn-IN',  // Bengali
+  'gu': 'gu-IN',  // Gujarati
+  'pa': 'pa-IN',  // Punjabi
+  'ur': 'ur-IN',  // Urdu
+  'or': 'or-IN',  // Odia  ← new language enabled by Sarvam
+};
 
+// ─── SARVAM: Transcribe + translate in ONE call ───────────────────────────────
+// Replaces: AssemblyAI transcription + N GPT translation calls
+// Returns same shape as processTranscript expects so nothing else changes
+
+const transcribeWithSarvam = async (audioFilePath, langCode) => {
+  console.log('[Sarvam] Transcribing with language:', langCode);
+  try {
+    const response = await sarvam.speechToText.transcribe({
+      file_path:        audioFilePath,
+      language_code:    langCode,
+      model:            'saaras:v3',
+      mode:             'translate',      // transcribe + translate to English in one call
+      with_diarization: true,             // speaker separation built-in
+    });
+    console.log('[Sarvam] Done. Turns:', response.turns?.length || 0);
+
+    // Build utterances in the same shape the rest of the code expects
+    const utterances = (response.turns || []).map((turn, i) => ({
+      speaker:     turn.speaker || `Speaker ${String.fromCharCode(65 + i)}`,
+      text:        turn.text || '',
+      englishText: turn.text || '',  // Sarvam already translated — no GPT loop needed
+      start:       (turn.start_time_ms || 0),
+      end:         (turn.end_time_ms   || 0),
+      words:       [],
+    }));
+
+    return {
+      success:         true,
+      provider:        'sarvam',
+      rawText:         response.transcript || '',
+      englishText:     response.transcript || '',  // already English
+      utterances,
+      skipTranslation: true,   // tells processTranscript to skip GPT translation loop
+      language_code:   langCode,
+    };
+  } catch (err) {
+    console.error('[Sarvam] Error — falling back to AssemblyAI:', err.message);
+    return null;  // null = trigger AssemblyAI fallback
+  }
+};
+
+// ─── translateToEnglish: kept as fallback for AssemblyAI path ─────────────────
 const translateToEnglish = async (text) => {
   try {
     const completion = await openai.chat.completions.create({
@@ -866,7 +926,57 @@ Rules:
 };
 
 // ─── Helper: Process completed transcript ────────────────────────────────────
-const processTranscript = async (transcript, mode) => {
+// NOW WITH SARVAM ROUTING:
+//   - If audio was processed by Sarvam → skip translation loop, use Sarvam output directly
+//   - If audio was processed by AssemblyAI (English/fallback) → old path unchanged
+//   - sarvamResult is passed in when Sarvam handled the audio; null otherwise
+
+const processTranscript = async (transcript, mode, sarvamResult = null) => {
+
+  // ── SARVAM PATH: audio was Indian language, Sarvam already handled it ───────
+  if (sarvamResult && sarvamResult.success) {
+    console.log('[processTranscript] Using Sarvam result — skipping translation loop');
+
+    const summaryInput = sarvamResult.englishText;
+    console.log('Generating summary...');
+    const autoSummary = summaryInput ? await generateSummary(summaryInput, mode) : null;
+
+    console.log('Extracting action items...');
+    const actionItems = summaryInput ? await extractActionItems(summaryInput) : [];
+
+    console.log('Generating smart title...');
+    const smartTitle = summaryInput ? await generateTitle(summaryInput, sarvamResult.language_code) : null;
+
+    console.log('Detecting speaker names...');
+    const speakerNameMap = await detectSpeakerNames(sarvamResult.utterances);
+
+    let finalUtterances = sarvamResult.utterances;
+    if (Object.keys(speakerNameMap).length > 0) {
+      finalUtterances = finalUtterances.map(u => ({
+        ...u,
+        speaker: speakerNameMap[u.speaker] || u.speaker,
+      }));
+    }
+
+    return {
+      success:      true,
+      status:       'completed',
+      text:         sarvamResult.rawText,
+      smartTitle:   smartTitle  || null,
+      englishText:  sarvamResult.englishText || null,
+      utterances:   finalUtterances,
+      words:        [],
+      duration:     null,
+      detectedLang: sarvamResult.language_code,
+      autoSummary:  autoSummary || null,
+      actionItems:  actionItems || [],
+      speakers:     sarvamResult.utterances.length,
+      speakerNames: speakerNameMap,
+      provider:     'sarvam',
+    };
+  }
+
+  // ── ASSEMBLYAI PATH: English audio OR Sarvam fallback — unchanged ─────────
   const rawText      = transcript.text || '';
   const detectedLang = transcript.language_code || 'en';
   const speakerList  = [...new Set((transcript.utterances || []).map(u => u.speaker))];
@@ -890,7 +1000,7 @@ const processTranscript = async (transcript, mode) => {
     /\b(hai|hain|tha|thi|mein|ka|ki|ko|aaj|kal|kya|nahi|hum|aap|tum|mere|tera|yeh|woh|karo|karenge|chahiye|aahe|pudhe|amhi|nahin|matlab|theek|achha|bilkul)\b/i.test(rawText);
 
   if (isIndianLang) {
-    console.log('Translating to English...');
+    console.log('Translating to English (AssemblyAI fallback path)...');
     englishText = await translateToEnglish(rawText);
     if (utterances.length > 0) {
       englishUtterances = await Promise.all(
@@ -942,25 +1052,66 @@ const processTranscript = async (transcript, mode) => {
     actionItems:  actionItems    || [],
     speakers:     speakerList.length,
     speakerNames: speakerNameMap,
+    provider:     'assemblyai',
   };
 };
 
 // ─── ROUTE 1: Start transcription job ────────────────────────────────────────
+// NOW WITH SARVAM ROUTING:
+//   Indian language hint → Sarvam (transcribe + translate in one call)
+//   English or Sarvam failure → AssemblyAI (existing webhook flow)
+
 app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
   const tempPath = req.file ? req.file.path : null;
   try {
     if (!req.file) return res.status(400).json({ success: false, error: 'No audio file received' });
 
-    console.log('Starting async transcription...');
-    console.log('File size:', req.file.size, 'bytes');
+    console.log('File received:', req.file.size, 'bytes');
 
-    console.log('Uploading to AssemblyAI...');
-    const uploadUrl = await aai.files.upload(fs.createReadStream(tempPath));
-    fs.unlinkSync(tempPath);
-    console.log('Uploaded:', uploadUrl);
+    // Get language hint sent by the app (e.g. 'hi', 'mr', 'ta')
+    const langHint      = req.body.language_hint || 'en';
+    const mode          = req.body.mode          || 'default';
+    const sarvamLang    = SARVAM_LANG_MAP[langHint];
+    const useSarvam     = !!sarvamLang && !!process.env.SARVAM_API_KEY;
+
+    console.log('Language hint:', langHint, '| Use Sarvam:', useSarvam);
+
+    // ── SARVAM PATH: Indian language detected ──────────────────────────────
+    if (useSarvam) {
+      console.log('[Sarvam] Processing with Saaras V3...');
+      const sarvamResult = await transcribeWithSarvam(tempPath, sarvamLang);
+
+      // Clean up temp file
+      try { if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (e) {}
+
+      if (sarvamResult) {
+        // Sarvam succeeded — process and return immediately (no webhook needed)
+        const result = await processTranscript(null, mode, sarvamResult);
+
+        // Store in transcription_jobs so the poll route can find it
+        const jobId = 'sarvam_' + Date.now();
+        await supabase.from('transcription_jobs').insert({
+          id:           jobId,
+          status:       'done',
+          result:       result,
+          completed_at: new Date().toISOString(),
+        });
+
+        // Return jobId immediately — app polls /transcribe-status/:jobId as normal
+        return res.json({ success: true, jobId, provider: 'sarvam' });
+      }
+
+      console.warn('[Sarvam] Failed — falling through to AssemblyAI');
+      // Fall through to AssemblyAI below if Sarvam errored
+    }
+
+    // ── ASSEMBLYAI PATH: English audio OR Sarvam fallback ──────────────────
+    console.log('[AssemblyAI] Uploading...');
+    const uploadUrl  = await aai.files.upload(fs.createReadStream(tempPath));
+    try { if (tempPath && fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (e) {}
+    console.log('Uploaded to AssemblyAI:', uploadUrl);
 
     const webhookUrl = `${process.env.RENDER_URL}/webhook/assemblyai`;
-
     const job = await aai.transcripts.submit({
       audio:              uploadUrl,
       speaker_labels:     true,
@@ -971,14 +1122,9 @@ app.post('/transcribe-start', upload.single('audio'), async (req, res) => {
       webhook_url:        webhookUrl,
     });
 
-    console.log('Job submitted with webhook! ID:', job.id);
-
-    await supabase.from('transcription_jobs').insert({
-      id:     job.id,
-      status: 'processing',
-    });
-
-    res.json({ success: true, jobId: job.id });
+    console.log('AssemblyAI job submitted. ID:', job.id);
+    await supabase.from('transcription_jobs').insert({ id: job.id, status: 'processing' });
+    res.json({ success: true, jobId: job.id, provider: 'assemblyai' });
 
   } catch (err) {
     console.error('/transcribe-start error:', err.message);

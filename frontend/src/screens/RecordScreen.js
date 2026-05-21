@@ -18,8 +18,25 @@ const TEMPLATES = [
   { id:'other',     icon:'📝', label:'Other',           color:'#374151', bg:'#F9FAFB', hint:'General recording — auto summary' },
 ];
 
+// ─── CHANGE 1: Language options added ────────────────────────────────────────
+// 'auto' = server auto-detects (existing behaviour — no change for user)
+// Specific language = sent as language_hint to server → Sarvam handles it
+const LANGUAGES = [
+  { code:'auto', label:'Auto-detect',  flag:'🌐' },
+  { code:'hi',   label:'Hindi',        flag:'🇮🇳' },
+  { code:'mr',   label:'Marathi',      flag:'🇮🇳' },
+  { code:'ta',   label:'Tamil',        flag:'🇮🇳' },
+  { code:'te',   label:'Telugu',       flag:'🇮🇳' },
+  { code:'kn',   label:'Kannada',      flag:'🇮🇳' },
+  { code:'ml',   label:'Malayalam',    flag:'🇮🇳' },
+  { code:'bn',   label:'Bengali',      flag:'🇮🇳' },
+  { code:'gu',   label:'Gujarati',     flag:'🇮🇳' },
+  { code:'pa',   label:'Punjabi',      flag:'🇮🇳' },
+  { code:'ur',   label:'Urdu',         flag:'🇵🇰' },
+  { code:'en',   label:'English',      flag:'🇬🇧' },
+];
+
 export default function RecordScreen({ navigation }) {
-  // ✅ ALL recording state from context — background-safe, no duplicate audio session
   const {
     isRecording,
     isProcessing,
@@ -36,6 +53,10 @@ export default function RecordScreen({ navigation }) {
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [showTemplates,    setShowTemplates]    = useState(false);
 
+  // ─── CHANGE 2: Language state — default 'auto' ────────────────────────────
+  const [selectedLanguage,  setSelectedLanguage]  = useState('auto');
+  const [showLanguages,     setShowLanguages]     = useState(false);
+
   const handleRecordPress = () => {
     if (isRecording) handleStop();
     else setShowTemplates(true);
@@ -48,14 +69,25 @@ export default function RecordScreen({ navigation }) {
     if (!started) setSelectedTemplate(null);
   };
 
+  // ─── CHANGE 3: handleStop passes mode and selectedLanguage to API ─────────
   const handleStop = async () => {
     try {
       const uri = await stopRecording();
       if (!uri) return;
 
-      const result = await transcribeWithSpeakers(uri, (message, percent) => {
-        setStatusText(percent ? `${message} ${percent}%` : message);
-      });
+      const mode         = selectedTemplate?.id || 'default';
+      const languageHint = selectedLanguage;     // 'auto', 'hi', 'mr', 'en' etc.
+
+      console.log('Starting transcription — mode:', mode, '| language:', languageHint);
+
+      const result = await transcribeWithSpeakers(
+        uri,
+        (message, percent) => {
+          setStatusText(percent ? `${message} ${percent}%` : message);
+        },
+        mode,           // ← CHANGE: pass template mode to server
+        languageHint,   // ← CHANGE: pass language hint to server (Sarvam routing)
+      );
 
       if (result.success) {
         const text  = result.englishText ||
@@ -87,6 +119,7 @@ export default function RecordScreen({ navigation }) {
           setStatusText('Transcript saved! ✅');
           resetRecording();
           setSelectedTemplate(null);
+          setSelectedLanguage('auto'); // ← CHANGE: reset language after save
           setTimeout(() => navigation.navigate('Home'), 1500);
         } else {
           setStatusText('Error saving. Please try again.');
@@ -143,11 +176,59 @@ export default function RecordScreen({ navigation }) {
     </Modal>
   );
 
+  // ─── CHANGE 4: Language picker modal ─────────────────────────────────────
+  const renderLanguageModal = () => (
+    <Modal visible={showLanguages} transparent animationType="slide"
+      onRequestClose={() => setShowLanguages(false)}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBox}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>🌐 Select Language</Text>
+            <TouchableOpacity onPress={() => setShowLanguages(false)}>
+              <Text style={styles.modalCloseX}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modalSubtitle}>
+            Selecting your language lets Sarvam AI transcribe with better accuracy
+          </Text>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {LANGUAGES.map(lang => (
+              <TouchableOpacity
+                key={lang.code}
+                style={[
+                  styles.langOption,
+                  selectedLanguage === lang.code && styles.langOptionActive,
+                ]}
+                onPress={() => { setSelectedLanguage(lang.code); setShowLanguages(false); }}
+                activeOpacity={0.75}>
+                <Text style={styles.langFlag}>{lang.flag}</Text>
+                <Text style={[
+                  styles.langLabel,
+                  selectedLanguage === lang.code && styles.langLabelActive,
+                ]}>
+                  {lang.label}
+                </Text>
+                {lang.code === 'auto' && (
+                  <Text style={styles.langHint}>Default — server detects</Text>
+                )}
+                {selectedLanguage === lang.code && (
+                  <Text style={styles.langCheck}>✓</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const activeTemplate = TEMPLATES.find(t => t.id === selectedTemplate?.id);
+  const activeLang     = LANGUAGES.find(l => l.code === selectedLanguage);
 
   return (
     <SafeAreaView style={styles.container}>
       {renderTemplateModal()}
+      {renderLanguageModal()}
 
       <Text style={styles.timer}>{formatTime(recordingTime)}</Text>
 
@@ -167,6 +248,22 @@ export default function RecordScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
+      {/* ── CHANGE 5: Language selector button — shown when not recording ── */}
+      {!isProcessing && !isRecording && (
+        <TouchableOpacity
+          style={styles.langBadge}
+          onPress={() => setShowLanguages(true)}>
+          <Text style={styles.langBadgeFlag}>{activeLang?.flag || '🌐'}</Text>
+          <Text style={styles.langBadgeText}>
+            {activeLang?.label || 'Auto-detect'}
+            {selectedLanguage !== 'auto' && selectedLanguage !== 'en' && (
+              <Text style={styles.langBadgeSarvam}> · Sarvam AI</Text>
+            )}
+          </Text>
+          <Text style={styles.langBadgeChange}>Change →</Text>
+        </TouchableOpacity>
+      )}
+
       <View style={styles.infoBox}>
         {isRecording ? (
           <>
@@ -175,7 +272,9 @@ export default function RecordScreen({ navigation }) {
             <Text style={styles.infoSubText}>
               🔴 Screen can be locked safely{'\n'}
               Speak in any Indian language or English{'\n'}
-              VoxNote auto-detects your language
+              {selectedLanguage !== 'auto'
+                ? `🎯 Language set to: ${activeLang?.label}`
+                : 'VoxNote auto-detects your language'}
             </Text>
           </>
         ) : isProcessing ? (
@@ -183,7 +282,9 @@ export default function RecordScreen({ navigation }) {
             <Text style={styles.infoIcon}>⚙️</Text>
             <Text style={styles.infoText}>Processing your recording...</Text>
             <Text style={styles.infoSubText}>
-              Detecting speakers + translating{'\n'}
+              {selectedLanguage !== 'auto' && selectedLanguage !== 'en'
+                ? `Sarvam AI transcribing ${activeLang?.label}...`
+                : 'Detecting speakers + translating'}{'\n'}
               This may take 30–60 seconds
             </Text>
           </>
@@ -220,12 +321,23 @@ const styles = StyleSheet.create({
   statusRow:          { flexDirection: 'row', alignItems: 'center',
                         justifyContent: 'center', gap: 8, marginBottom: 10 },
   statusText:         { fontSize: 14, color: '#666', textAlign: 'center' },
+
   templateBadge:      { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
                         borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
-                        marginBottom: 12, gap: 6 },
+                        marginBottom: 8, gap: 6 },
   templateBadgeIcon:  { fontSize: 16 },
   templateBadgeLabel: { fontSize: 13, fontWeight: '700', flex: 1 },
   templateBadgeChange:{ fontSize: 12 },
+
+  // ── Language badge styles (new) ──────────────────────────────────────────
+  langBadge:          { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF',
+                        borderWidth: 1, borderColor: '#D0DAF8', borderRadius: 10,
+                        paddingHorizontal: 12, paddingVertical: 8, marginBottom: 10, gap: 6 },
+  langBadgeFlag:      { fontSize: 16 },
+  langBadgeText:      { fontSize: 13, color: '#1A56A0', fontWeight: '600', flex: 1 },
+  langBadgeSarvam:    { fontSize: 11, color: '#7C3AED', fontWeight: '400' },
+  langBadgeChange:    { fontSize: 12, color: '#888' },
+
   infoBox:            { flex: 1, justifyContent: 'center', alignItems: 'center',
                         marginBottom: 20, backgroundColor: '#FFFFFF', borderRadius: 16,
                         padding: 24, borderWidth: 1, borderColor: '#DCE9F8' },
@@ -236,6 +348,7 @@ const styles = StyleSheet.create({
   recordBtn:          { backgroundColor: '#1A56A0', padding: 20, borderRadius: 16, alignItems: 'center' },
   recordBtnActive:    { backgroundColor: '#C0392B' },
   recordBtnText:      { color: '#FFFFFF', fontSize: 20, fontWeight: 'bold' },
+
   modalOverlay:       { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalBox:           { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24,
                         borderTopRightRadius: 24, padding: 24, paddingBottom: 40, maxHeight: '85%' },
@@ -244,6 +357,7 @@ const styles = StyleSheet.create({
   modalTitle:         { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
   modalCloseX:        { fontSize: 22, color: '#888', padding: 4 },
   modalSubtitle:      { fontSize: 13, color: '#888', marginBottom: 16 },
+
   templateOption:     { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
                         borderRadius: 14, padding: 14, marginBottom: 10, gap: 12 },
   templateIcon:       { fontSize: 24 },
@@ -251,4 +365,14 @@ const styles = StyleSheet.create({
   templateLabel:      { fontSize: 15, fontWeight: '700', marginBottom: 2 },
   templateHint:       { fontSize: 12, color: '#888' },
   templateArrow:      { fontSize: 24, fontWeight: 'bold' },
+
+  // ── Language option styles (new) ─────────────────────────────────────────
+  langOption:         { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F7FA',
+                        borderRadius: 12, padding: 14, marginBottom: 8, gap: 12 },
+  langOptionActive:   { backgroundColor: '#E8F0FC', borderWidth: 2, borderColor: '#1A56A0' },
+  langFlag:           { fontSize: 22 },
+  langLabel:          { fontSize: 15, color: '#333', fontWeight: '500', flex: 1 },
+  langLabelActive:    { color: '#1A56A0', fontWeight: '700' },
+  langHint:           { fontSize: 11, color: '#AAA' },
+  langCheck:          { fontSize: 18, color: '#1A56A0', fontWeight: 'bold' },
 });

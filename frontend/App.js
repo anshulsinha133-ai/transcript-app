@@ -7,7 +7,7 @@ import {
   useNavigationContainerRef
 } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import {
+import {  
   ActivityIndicator, View, TouchableOpacity,
   Text, StyleSheet
 } from 'react-native';

@@ -51,14 +51,13 @@ export const checkServerHealth = async () => {
   } catch (err) { throw new Error('Cannot reach server.'); }
 };
 
-// ─── FIX: summarizeTranscript now accepts mode and passes it to server ────────
 export const summarizeTranscript = async (transcript, mode) => {
   try {
     const response = await axios.post(
       `${RENDER_URL}/summarize`,
       {
         transcript,
-        mode: mode || 'default', // ✅ FIXED — was missing, causing one-line summaries
+        mode: mode || 'default',
       },
       {
         headers: { 'Content-Type': 'application/json' },
@@ -67,15 +66,14 @@ export const summarizeTranscript = async (transcript, mode) => {
     );
     return {
       success:    true,
-      summary:    response.data.summary,    // JSON string for storage
-      structured: response.data.structured, // parsed object if available
+      summary:    response.data.summary,
+      structured: response.data.structured,
     };
   } catch (err) {
     console.error('Summary error:', err.message);
     throw new Error('Summary failed: ' + err.message);
   }
 };
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const chatWithTranscripts = async (question, transcripts) => {
   try {
@@ -110,7 +108,12 @@ export const getRealtimeToken = async () => {
   }
 };
 
-export const startTranscription = async (uri, onProgress = null) => {
+// ─── CHANGE 1: startTranscription now accepts mode and languageHint ───────────
+// mode       → template id ('meeting', 'sales', 'doctor' etc.) — used by server for AI summary
+// languageHint → short lang code ('hi', 'mr', 'en' etc.) — tells server to route to Sarvam
+// Both are optional — defaults to 'default' mode and 'auto' language (server auto-detects)
+
+export const startTranscription = async (uri, onProgress = null, mode = 'default', languageHint = 'auto') => {
   const maxUploadAttempts = 3;
   await savePendingUpload(uri);
 
@@ -124,6 +127,11 @@ export const startTranscription = async (uri, onProgress = null) => {
       const formData = new FormData();
       formData.append('audio', { uri, type: 'audio/m4a', name: 'recording.m4a' });
 
+      // ── CHANGE: send mode and language_hint to backend ────────────────────
+      formData.append('mode',          mode);          // e.g. 'meeting', 'sales'
+      formData.append('language_hint', languageHint);  // e.g. 'hi', 'mr', 'auto'
+      // ─────────────────────────────────────────────────────────────────────
+
       if (onProgress) onProgress('Submitting to server...', 20);
 
       const response = await axios.post(
@@ -131,7 +139,7 @@ export const startTranscription = async (uri, onProgress = null) => {
         formData,
         {
           headers:          { 'Content-Type': 'multipart/form-data' },
-          timeout:          300000, // 5 min timeout for large files
+          timeout:          300000,
           transformRequest: (data) => data,
         }
       );
@@ -139,7 +147,7 @@ export const startTranscription = async (uri, onProgress = null) => {
       if (!response.data.success) throw new Error(response.data.error || 'Failed to start transcription');
 
       const jobId = response.data.jobId;
-      console.log('Job started, ID:', jobId);
+      console.log('Job started, ID:', jobId, '| Provider:', response.data.provider);
       await savePendingJob(jobId, uri);
       await AsyncStorage.removeItem(PENDING_UPLOAD_KEY);
       return { success: true, jobId };
@@ -147,7 +155,7 @@ export const startTranscription = async (uri, onProgress = null) => {
     } catch (err) {
       console.error(`Upload attempt ${attempt} failed:`, err.message);
       if (attempt < maxUploadAttempts) {
-        const waitMs = attempt * 3000; // shorter retry gap
+        const waitMs = attempt * 3000;
         if (onProgress) onProgress(`Upload failed — retrying in ${waitMs/1000}s...`, 10);
         await new Promise(resolve => setTimeout(resolve, waitMs));
       } else {
@@ -229,10 +237,13 @@ export const pollTranscription = async (jobId, onProgress = null) => {
   };
 };
 
-export const transcribeWithSpeakers = async (uri, onProgress = null) => {
+// ─── CHANGE 2: transcribeWithSpeakers now accepts mode and languageHint ───────
+// These are passed straight through to startTranscription → server
+
+export const transcribeWithSpeakers = async (uri, onProgress = null, mode = 'default', languageHint = 'auto') => {
   try {
     if (onProgress) onProgress('Uploading audio...', 10);
-    const startResult = await startTranscription(uri, onProgress);
+    const startResult = await startTranscription(uri, onProgress, mode, languageHint);
     if (!startResult.success) {
       return {
         success:        false,
