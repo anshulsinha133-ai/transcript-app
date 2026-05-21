@@ -6,7 +6,7 @@ const fs         = require('fs');
 const crypto     = require('crypto');
 const OpenAI     = require('openai');
 const { AssemblyAI } = require('assemblyai');
-const { SarvamAI }   = require('sarvamai');          // ← NEW: Sarvam SDK
+const { SarvamAIClient } = require('sarvamai');          // ← NEW: Sarvam SDK
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
@@ -16,7 +16,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
 
 // ─── Sarvam client (Indian language transcription + translation) ──────────────
-const sarvam = new SarvamAI({ apiSubscriptionKey: process.env.SARVAM_API_KEY });
+const sarvam = new SarvamAIClient({ apiSubscriptionKey: process.env.SARVAM_API_KEY });
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
