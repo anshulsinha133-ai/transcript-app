@@ -6,7 +6,7 @@ const fs         = require('fs');
 const crypto     = require('crypto');
 const OpenAI     = require('openai');
 const { AssemblyAI } = require('assemblyai');
-const { SarvamAIClient } = require('sarvamai');          // ← NEW: Sarvam SDK
+const { SarvamAI }   = require('sarvamai');          // ← NEW: Sarvam SDK
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
@@ -16,7 +16,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const aai    = new AssemblyAI({ apiKey: process.env.ASSEMBLYAI_KEY });
 
 // ─── Sarvam client (Indian language transcription + translation) ──────────────
-const sarvam = new SarvamAIClient({ apiSubscriptionKey: process.env.SARVAM_API_KEY });
+const sarvam = new SarvamAI({ apiSubscriptionKey: process.env.SARVAM_API_KEY });
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -1155,10 +1155,15 @@ app.post('/webhook/assemblyai', async (req, res) => {
       .eq('id', transcript_id)
       .single();
 
-    if (existingJob?.status === 'done') {
-      console.log('Job already processed, skipping:', transcript_id);
+    if (existingJob?.status === 'done' || existingJob?.status === 'processing_lock') {
+      console.log('Job already processed or locked, skipping:', transcript_id);
       return;
     }
+
+    // ── Set a processing lock IMMEDIATELY to stop the poll route running simultaneously
+    await supabase.from('transcription_jobs')
+      .update({ status: 'processing_lock' })
+      .eq('id', transcript_id);
 
     console.log('Fetching transcript from AssemblyAI...');
     const transcript = await aai.transcripts.get(transcript_id);
@@ -1237,8 +1242,23 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         return res.json(recheckJob.result);
       }
 
+      // If webhook has the lock, wait longer for it to finish — don't double-process
+      if (recheckJob?.status === 'processing_lock') {
+        console.log('Webhook has lock — waiting for it to finish:', jobId);
+        await new Promise(resolve => setTimeout(resolve, 8000));
+        const { data: lockCheck } = await supabase
+          .from('transcription_jobs')
+          .select('status, result')
+          .eq('id', jobId)
+          .single();
+        if (lockCheck?.status === 'done' && lockCheck?.result) {
+          console.log('Webhook finished — returning its result:', jobId);
+          return res.json(lockCheck.result);
+        }
+      }
+
       // Wait briefly — webhook may be processing simultaneously
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
 
       // Check one more time if webhook completed during our wait
       const { data: finalCheck } = await supabase
@@ -1252,7 +1272,8 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         return res.json(finalCheck.result);
       }
 
-      console.log('Processing completed transcript (fallback)...');
+      // Only process here if webhook genuinely did not run (no lock was ever set)
+      console.log('Processing completed transcript (fallback — webhook did not run)...');
       const result = await processTranscript(transcript);
 
       await supabase.from('transcription_jobs')
