@@ -47,26 +47,363 @@ const parseStructuredSummary = (summary) => {
   }
 };
 
-// ─── Structured summary renderer ─────────────────────────────────────────────
-const StructuredSummary = ({ summary, mode }) => {
+// ─── Detect if summary uses new 11-section format ────────────────────────────
+const isNewFormat = (data) => data && typeof data === 'object' && data.executive_summary;
+
+// ─── NEW: 11-Section Structured Summary Component ────────────────────────────
+// Renders all 11 sections from the new anti-hallucination prompt.
+// Each section is collapsible. Handles empty arrays gracefully.
+
+const StructuredSummaryV2 = ({ data }) => {
+  const [collapsed, setCollapsed] = useState({});
+  const toggle = (key) => setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const arr  = (a) => Array.isArray(a) && a.length > 0;
+  const val  = (v) => v && v !== 'Not specified' && v !== 'None identified.' && v !== 'None identified' && v !== 'Not clearly stated in transcript.';
+
+  const SectionHeader = ({ sectionKey, icon, label }) => (
+    <TouchableOpacity style={ss11.secHeader} onPress={() => toggle(sectionKey)} activeOpacity={0.7}>
+      <Text style={ss11.secIcon}>{icon}</Text>
+      <Text style={ss11.secLabel}>{label}</Text>
+      <Text style={ss11.secChevron}>{collapsed[sectionKey] ? '▶' : '▼'}</Text>
+    </TouchableOpacity>
+  );
+
+  const Empty = () => <Text style={ss11.empty}>None identified.</Text>;
+
+  const BulletList = ({ items, color = '#374151' }) => (
+    arr(items)
+      ? items.map((item, i) => (
+          <View key={i} style={ss11.bulletRow}>
+            <View style={[ss11.bullet, { backgroundColor: color }]} />
+            <Text style={ss11.bulletText}>{item}</Text>
+          </View>
+        ))
+      : <Empty />
+  );
+
+  // Generic table renderer
+  const Table = ({ headers, rows, emptyMsg = 'None identified.' }) => {
+    if (!arr(rows)) return <Text style={ss11.empty}>{emptyMsg}</Text>;
+    return (
+      <View style={ss11.table}>
+        <View style={ss11.tableHead}>
+          {headers.map((h, i) => (
+            <Text key={i} style={[ss11.tableHeadCell, i === 0 && { flex: 0.4 }]}>{h}</Text>
+          ))}
+        </View>
+        {rows.map((row, ri) => (
+          <View key={ri} style={[ss11.tableRow, ri % 2 === 0 ? ss11.tableRowEven : ss11.tableRowOdd]}>
+            {Object.values(row).map((cell, ci) => (
+              <Text key={ci} style={[ss11.tableCell, ci === 0 && { flex: 0.4, fontWeight: '700' }]}>
+                {cell || 'Not specified'}
+              </Text>
+            ))}
+          </View>
+        ))}
+      </View>
+    );
+  };
+
+  return (
+    <View>
+
+      {/* ── 1. Executive Summary ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="exec" icon="📋" label="1. Executive Summary" />
+        {!collapsed.exec && (
+          <View style={ss11.secBody}>
+            {val(data.executive_summary?.main_purpose) && (
+              <View style={ss11.fieldRow}>
+                <Text style={ss11.fieldLabel}>MAIN PURPOSE</Text>
+                <Text style={ss11.fieldValue}>{data.executive_summary.main_purpose}</Text>
+              </View>
+            )}
+            {arr(data.executive_summary?.core_themes) && (
+              <View style={ss11.fieldRow}>
+                <Text style={ss11.fieldLabel}>CORE THEMES</Text>
+                <Text style={ss11.fieldValue}>{data.executive_summary.core_themes.join('  •  ')}</Text>
+              </View>
+            )}
+            {arr(data.executive_summary?.major_conclusions) && (
+              <View style={ss11.fieldRow}>
+                <Text style={ss11.fieldLabel}>MAJOR CONCLUSIONS</Text>
+                <BulletList items={data.executive_summary.major_conclusions} color="#1A56A0" />
+              </View>
+            )}
+            {arr(data.executive_summary?.key_outcomes) && (
+              <View style={ss11.fieldRow}>
+                <Text style={ss11.fieldLabel}>KEY OUTCOMES</Text>
+                <BulletList items={data.executive_summary.key_outcomes} color="#1A7A4A" />
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+
+      {/* ── 2. Detailed Summary ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="detail" icon="📝" label="2. Detailed Summary" />
+        {!collapsed.detail && (
+          <View style={ss11.secBody}>
+            {arr(data.detailed_summary)
+              ? data.detailed_summary.map((item, i) => (
+                  <View key={i} style={ss11.detailBlock}>
+                    <Text style={ss11.detailTopic}>{item.topic}</Text>
+                    {val(item.speaker) && (
+                      <Text style={ss11.detailSpeaker}>{item.speaker}</Text>
+                    )}
+                    <Text style={ss11.detailText}>{item.what_was_said}</Text>
+                  </View>
+                ))
+              : <Empty />}
+          </View>
+        )}
+      </View>
+
+      {/* ── 3. Key Points ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="kp" icon="💡" label="3. Key Points / Core Insights" />
+        {!collapsed.kp && (
+          <View style={ss11.secBody}>
+            {arr(data.key_points)
+              ? data.key_points.map((item, i) => (
+                  <View key={i} style={ss11.kpRow}>
+                    <View style={ss11.kpNum}><Text style={ss11.kpNumText}>{item.number || i + 1}</Text></View>
+                    <View style={ss11.kpContent}>
+                      <Text style={ss11.kpPoint}>{item.key_point}</Text>
+                      {val(item.supporting_context) && (
+                        <Text style={ss11.kpContext}>{item.supporting_context}</Text>
+                      )}
+                    </View>
+                  </View>
+                ))
+              : <Empty />}
+          </View>
+        )}
+      </View>
+
+      {/* ── 4. Decisions ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="dec" icon="✅" label="4. Decisions Taken" />
+        {!collapsed.dec && (
+          <View style={ss11.secBody}>
+            <Table
+              headers={['Decision', 'Owner', 'Context']}
+              rows={(data.decisions_taken || []).map(d => ({ Decision: d.decision, Owner: d.owner, Context: d.context }))}
+              emptyMsg="No explicit decisions identified."
+            />
+          </View>
+        )}
+      </View>
+
+      {/* ── 5. Action Items ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="ai" icon="🎯" label="5. Action Items / Follow-Up Tasks" />
+        {!collapsed.ai && (
+          <View style={ss11.secBody}>
+            {arr(data.action_items)
+              ? data.action_items.map((item, i) => (
+                  <View key={i} style={[ss11.actionCard, i % 2 === 0 ? ss11.actionEven : ss11.actionOdd]}>
+                    <Text style={ss11.actionTask}>{item.action}</Text>
+                    <View style={ss11.actionMeta}>
+                      <Text style={ss11.actionMetaText}>👤 {item.owner || 'Not specified'}</Text>
+                      <Text style={ss11.actionMetaText}>📅 {item.deadline || 'Not specified'}</Text>
+                      {val(item.dependency) && (
+                        <Text style={ss11.actionMetaText}>🔗 {item.dependency}</Text>
+                      )}
+                    </View>
+                  </View>
+                ))
+              : <Text style={ss11.empty}>No action items identified.</Text>}
+          </View>
+        )}
+      </View>
+
+      {/* ── 6. Open Questions ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="oq" icon="❓" label="6. Open Questions / Unresolved Issues" />
+        {!collapsed.oq && (
+          <View style={ss11.secBody}>
+            {arr(data.open_questions)
+              ? data.open_questions.map((item, i) => (
+                  <View key={i} style={ss11.bulletRow}>
+                    <View style={[ss11.bullet, { backgroundColor: '#D97706' }]} />
+                    <Text style={ss11.bulletText}>
+                      {item.question}
+                      {item.status ? <Text style={ss11.statusTag}> ({item.status})</Text> : null}
+                    </Text>
+                  </View>
+                ))
+              : <Empty />}
+          </View>
+        )}
+      </View>
+
+      {/* ── 7. Risks / Concerns ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="risk" icon="⚠️" label="7. Risks / Concerns Mentioned" />
+        {!collapsed.risk && (
+          <View style={ss11.secBody}>
+            <Table
+              headers={['Risk / Concern', 'Mentioned By', 'Context']}
+              rows={(data.risks_concerns || []).map(r => ({ 'Risk': r.risk, 'By': r.mentioned_by, 'Context': r.context }))}
+              emptyMsg="No risks or concerns identified."
+            />
+          </View>
+        )}
+      </View>
+
+      {/* ── 8. Highlights ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="hl" icon="⭐" label="8. Important Highlights" />
+        {!collapsed.hl && (
+          <View style={ss11.secBody}>
+            <BulletList items={data.important_highlights} color="#7C3AED" />
+          </View>
+        )}
+      </View>
+
+      {/* ── 9. Quotes ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="qt" icon="💬" label="9. Quotes Worth Retaining" />
+        {!collapsed.qt && (
+          <View style={ss11.secBody}>
+            {arr(data.quotes_worth_retaining)
+              ? data.quotes_worth_retaining.map((item, i) => (
+                  <View key={i} style={ss11.quoteBlock}>
+                    <Text style={ss11.quoteText}>"{item.quote}"</Text>
+                    <Text style={ss11.quoteSpeaker}>— {item.speaker}</Text>
+                  </View>
+                ))
+              : <Empty />}
+          </View>
+        )}
+      </View>
+
+      {/* ── 10. Missing Info ── */}
+      <View style={ss11.section}>
+        <SectionHeader sectionKey="mi" icon="🔍" label="10. Missing Information / Ambiguities" />
+        {!collapsed.mi && (
+          <View style={ss11.secBody}>
+            {arr(data.missing_information)
+              ? data.missing_information.map((item, i) => (
+                  <View key={i} style={ss11.bulletRow}>
+                    <View style={[ss11.bullet, { backgroundColor: '#6B7280' }]} />
+                    <Text style={ss11.bulletText}>
+                      <Text style={{ fontWeight: '700' }}>{item.area}: </Text>
+                      {item.issue}
+                    </Text>
+                  </View>
+                ))
+              : <Empty />}
+          </View>
+        )}
+      </View>
+
+      {/* ── 11. One-Page Brief ── */}
+      {data.one_page_brief && (
+        <View style={ss11.section}>
+          <SectionHeader sectionKey="brief" icon="📄" label="11. One-Page Condensed Brief" />
+          {!collapsed.brief && (
+            <View style={[ss11.secBody, ss11.briefBody]}>
+              {[
+                ['Purpose',       data.one_page_brief.purpose],
+                ['Decisions',     data.one_page_brief.decisions],
+                ['Actions',       data.one_page_brief.actions],
+                ['Risks',         data.one_page_brief.risks],
+                ['Pending Items', data.one_page_brief.pending_items],
+              ].map(([label, value]) => (
+                <View key={label} style={ss11.briefRow}>
+                  <Text style={ss11.briefLabel}>{label}</Text>
+                  <Text style={ss11.briefValue}>{value || 'None identified.'}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+      )}
+
+    </View>
+  );
+};
+
+// Styles for 11-section component
+const ss11 = StyleSheet.create({
+  section:       { marginBottom: 8, borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', overflow: 'hidden' },
+  secHeader:     { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: '#F3F4F6' },
+  secIcon:       { fontSize: 15, marginRight: 8 },
+  secLabel:      { flex: 1, fontSize: 13, fontWeight: '700', color: '#1F2937' },
+  secChevron:    { fontSize: 10, color: '#9CA3AF' },
+  secBody:       { padding: 12, backgroundColor: '#FFFFFF' },
+  empty:         { fontSize: 12, color: '#9CA3AF', fontStyle: 'italic', padding: 4 },
+
+  fieldRow:      { marginBottom: 10 },
+  fieldLabel:    { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, marginBottom: 3 },
+  fieldValue:    { fontSize: 13, color: '#1F2937', lineHeight: 20 },
+
+  bulletRow:     { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 },
+  bullet:        { width: 6, height: 6, borderRadius: 3, marginTop: 7, marginRight: 8, flexShrink: 0 },
+  bulletText:    { flex: 1, fontSize: 13, color: '#374151', lineHeight: 20 },
+  statusTag:     { fontSize: 11, color: '#9CA3AF' },
+
+  detailBlock:   { borderLeftWidth: 3, borderLeftColor: '#1A56A0', paddingLeft: 10, marginBottom: 12 },
+  detailTopic:   { fontSize: 13, fontWeight: '700', color: '#1A56A0', marginBottom: 2 },
+  detailSpeaker: { fontSize: 11, color: '#7C3AED', marginBottom: 3 },
+  detailText:    { fontSize: 13, color: '#374151', lineHeight: 19 },
+
+  kpRow:         { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10 },
+  kpNum:         { width: 26, height: 26, borderRadius: 13, backgroundColor: '#1A56A0',
+                   justifyContent: 'center', alignItems: 'center', marginRight: 10, flexShrink: 0 },
+  kpNumText:     { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
+  kpContent:     { flex: 1 },
+  kpPoint:       { fontSize: 13, fontWeight: '600', color: '#1F2937', lineHeight: 19 },
+  kpContext:     { fontSize: 12, color: '#6B7280', marginTop: 2, lineHeight: 18 },
+
+  table:         { borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#E5E7EB' },
+  tableHead:     { flexDirection: 'row', backgroundColor: '#1A56A0', padding: 8 },
+  tableHeadCell: { flex: 1, fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
+  tableRow:      { flexDirection: 'row', padding: 8 },
+  tableRowEven:  { backgroundColor: '#FFFFFF' },
+  tableRowOdd:   { backgroundColor: '#F9FAFB' },
+  tableCell:     { flex: 1, fontSize: 12, color: '#374151', lineHeight: 18 },
+
+  actionCard:    { borderRadius: 8, padding: 10, marginBottom: 6 },
+  actionEven:    { backgroundColor: '#F8FAFC' },
+  actionOdd:     { backgroundColor: '#F1F5F9' },
+  actionTask:    { fontSize: 13, fontWeight: '600', color: '#1E293B', marginBottom: 4 },
+  actionMeta:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  actionMetaText:{ fontSize: 11, color: '#64748B' },
+
+  quoteBlock:    { borderLeftWidth: 3, borderLeftColor: '#7C3AED', backgroundColor: '#F5F3FF',
+                   padding: 10, borderRadius: 0, marginBottom: 8 },
+  quoteText:     { fontSize: 13, color: '#4C1D95', fontStyle: 'italic', lineHeight: 19 },
+  quoteSpeaker:  { fontSize: 11, color: '#7C3AED', marginTop: 4 },
+
+  briefBody:     { backgroundColor: '#EFF6FF', borderRadius: 8 },
+  briefRow:      { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#DBEAFE', paddingVertical: 8, paddingHorizontal: 4 },
+  briefLabel:    { width: 90, fontSize: 12, fontWeight: '700', color: '#1A56A0' },
+  briefValue:    { flex: 1, fontSize: 12, color: '#374151', lineHeight: 18 },
+});
+
+// ─── OLD: Structured summary renderer (kept for backward compatibility) ────────
+// Renders old-format JSON (meeting/sales/lecture/doctor/legal/interview fields).
+// Only used when data does NOT have executive_summary field.
+const StructuredSummaryLegacy = ({ summary, mode }) => {
   const data = useMemo(() => parseStructuredSummary(summary), [summary]);
   if (!data) return null;
-
   const cfg = TEMPLATE_MAP[mode] || { color: '#374151', bg: '#F9FAFB' };
-
   const SectionLabel = ({ icon, text, color }) => (
     <View style={[ss.sectionLabel, { borderLeftColor: color || cfg.color }]}>
       <Text style={[ss.sectionLabelText, { color: color || cfg.color }]}>{icon}  {text}</Text>
     </View>
   );
-
   const BulletItem = ({ text, color }) => (
     <View style={ss.bulletRow}>
       <View style={[ss.bullet, { backgroundColor: color || cfg.color }]} />
       <Text style={ss.bulletText}>{text}</Text>
     </View>
   );
-
   const ActionRow = ({ item, index }) => (
     <View style={[ss.actionRow, index % 2 === 0 ? ss.actionEven : ss.actionOdd]}>
       <View style={[ss.actionNum, { backgroundColor: cfg.color }]}>
@@ -75,17 +412,12 @@ const StructuredSummary = ({ summary, mode }) => {
       <View style={ss.actionContent}>
         <Text style={ss.actionTask}>{item.task}</Text>
         <View style={ss.actionMeta}>
-          {item.owner && item.owner !== 'Unassigned' && (
-            <Text style={ss.actionMetaText}>👤 {item.owner}</Text>
-          )}
-          {item.deadline && item.deadline !== 'Not mentioned' && (
-            <Text style={ss.actionMetaText}>📅 {item.deadline}</Text>
-          )}
+          {item.owner && item.owner !== 'Unassigned' && <Text style={ss.actionMetaText}>👤 {item.owner}</Text>}
+          {item.deadline && item.deadline !== 'Not mentioned' && <Text style={ss.actionMetaText}>📅 {item.deadline}</Text>}
         </View>
       </View>
     </View>
   );
-
   const HighlightBox = ({ icon, label, value, bg, color }) => {
     if (!value || value === 'Not mentioned') return null;
     return (
@@ -95,263 +427,59 @@ const StructuredSummary = ({ summary, mode }) => {
       </View>
     );
   };
-
   return (
     <View>
-      {/* One-line summary */}
-      {data.summary && (
-        <View style={[ss.summaryLine, { borderLeftColor: cfg.color }]}>
-          <Text style={ss.summaryLineText}>{data.summary}</Text>
-        </View>
-      )}
-
-      {/* ── MEETING ── */}
+      {data.summary && <View style={[ss.summaryLine, { borderLeftColor: cfg.color }]}><Text style={ss.summaryLineText}>{data.summary}</Text></View>}
       {mode === 'meeting' && <>
-        {data.key_decisions?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="✅" text="Key Decisions" />
-            {data.key_decisions.map((d, i) => <BulletItem key={i} text={d} />)}
-          </View>
-        )}
-        {data.action_items?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="📋" text="Action Items" />
-            {data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}
-          </View>
-        )}
+        {data.key_decisions?.length > 0 && <View style={ss.block}><SectionLabel icon="✅" text="Key Decisions" />{data.key_decisions.map((d, i) => <BulletItem key={i} text={d} />)}</View>}
+        {data.action_items?.length > 0 && <View style={ss.block}><SectionLabel icon="📋" text="Action Items" />{data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}</View>}
         <HighlightBox icon="📅" label="Next Meeting" value={data.next_meeting_date} />
+        {data.key_points?.length > 0 && <View style={ss.block}><SectionLabel icon="💬" text="Key Points Discussed" />{data.key_points.map((p, i) => <BulletItem key={i} text={p} />)}</View>}
       </>}
-
-      {/* ── SALES ── */}
       {mode === 'sales' && <>
         <HighlightBox icon="🏢" label="Lead" value={data.lead_name} bg="#ECFDF5" color="#059669" />
-        {data.requirements?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="🎯" text="Requirements" color="#059669" />
-            {data.requirements.map((r, i) => <BulletItem key={i} text={r} color="#059669" />)}
-          </View>
-        )}
-        {data.objections?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="⚠️" text="Objections" color="#D97706" />
-            {data.objections.map((o, i) => <BulletItem key={i} text={o} color="#D97706" />)}
-          </View>
-        )}
-        {data.next_steps?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="🚀" text="Next Steps" color="#059669" />
-            {data.next_steps.map((s, i) => <BulletItem key={i} text={s} color="#059669" />)}
-          </View>
-        )}
+        {data.requirements?.length > 0 && <View style={ss.block}><SectionLabel icon="🎯" text="Requirements" color="#059669" />{data.requirements.map((r, i) => <BulletItem key={i} text={r} color="#059669" />)}</View>}
+        {data.objections?.length > 0 && <View style={ss.block}><SectionLabel icon="⚠️" text="Objections" color="#D97706" />{data.objections.map((o, i) => <BulletItem key={i} text={o} color="#D97706" />)}</View>}
+        {data.next_steps?.length > 0 && <View style={ss.block}><SectionLabel icon="🚀" text="Next Steps" color="#059669" />{data.next_steps.map((s, i) => <BulletItem key={i} text={s} color="#059669" />)}</View>}
+        {data.deal_stage && <View style={[ss.highlightBox, { backgroundColor: '#ECFDF5', borderColor: '#059669' }]}><Text style={[ss.highlightLabel, { color: '#059669' }]}>📊 Deal Stage</Text><Text style={ss.highlightValue}>{data.deal_stage}</Text></View>}
       </>}
-
-      {/* ── LECTURE ── */}
       {mode === 'lecture' && <>
-        {data.key_concepts?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="💡" text="Key Concepts" color="#7C3AED" />
-            {data.key_concepts.map((c, i) => <BulletItem key={i} text={c} color="#7C3AED" />)}
-          </View>
-        )}
-        {data.definitions?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="📖" text="Definitions" color="#7C3AED" />
-            {data.definitions.map((d, i) => (
-              <View key={i} style={[ss.defBox, { borderLeftColor: '#7C3AED' }]}>
-                <Text style={[ss.defTerm, { color: '#7C3AED' }]}>{d.term}</Text>
-                <Text style={ss.defMeaning}>{d.definition}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-        {data.study_questions?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="❓" text="Study Questions" color="#7C3AED" />
-            {data.study_questions.map((q, i) => (
-              <View key={i} style={ss.questionRow}>
-                <Text style={[ss.questionNum, { color: '#7C3AED' }]}>Q{i + 1}</Text>
-                <Text style={ss.questionText}>{q}</Text>
-              </View>
-            ))}
-          </View>
-        )}
+        {data.key_concepts?.length > 0 && <View style={ss.block}><SectionLabel icon="💡" text="Key Concepts" color="#7C3AED" />{data.key_concepts.map((c, i) => <BulletItem key={i} text={c} color="#7C3AED" />)}</View>}
+        {data.definitions?.length > 0 && <View style={ss.block}><SectionLabel icon="📖" text="Definitions" color="#7C3AED" />{data.definitions.map((d, i) => <View key={i} style={[ss.defBox, { borderLeftColor: '#7C3AED' }]}><Text style={[ss.defTerm, { color: '#7C3AED' }]}>{d.term}</Text><Text style={ss.defMeaning}>{d.definition}</Text></View>)}</View>}
+        {data.study_questions?.length > 0 && <View style={ss.block}><SectionLabel icon="❓" text="Study Questions" color="#7C3AED" />{data.study_questions.map((q, i) => <View key={i} style={ss.questionRow}><Text style={[ss.questionNum, { color: '#7C3AED' }]}>Q{i + 1}</Text><Text style={ss.questionText}>{q}</Text></View>)}</View>}
+        {data.important_points?.length > 0 && <View style={ss.block}><SectionLabel icon="📌" text="Important Points" color="#7C3AED" />{data.important_points.map((p, i) => <BulletItem key={i} text={p} color="#7C3AED" />)}</View>}
       </>}
-
-      {/* ── DOCTOR ── */}
       {mode === 'doctor' && <>
-        {data.patient_complaint && (
-          <View style={[ss.plainBox, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
-            <Text style={[ss.plainBoxLabel, { color: '#DC2626' }]}>🩺 Patient Complaint</Text>
-            <Text style={ss.plainBoxText}>{data.patient_complaint}</Text>
-          </View>
-        )}
+        {data.patient_complaint && <View style={[ss.plainBox, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}><Text style={[ss.plainBoxLabel, { color: '#DC2626' }]}>🩺 Patient Complaint</Text><Text style={ss.plainBoxText}>{data.patient_complaint}</Text></View>}
         <HighlightBox icon="🔬" label="Diagnosis" value={data.diagnosis} bg="#FEF2F2" color="#DC2626" />
-        {data.prescription?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="💊" text="Prescription" color="#DC2626" />
-            {data.prescription.map((p, i) => (
-              <View key={i} style={[ss.actionRow, i % 2 === 0 ? ss.actionEven : ss.actionOdd]}>
-                <Text style={[ss.medicineName, { color: '#DC2626' }]}>{p.medicine}</Text>
-                <View style={ss.actionMeta}>
-                  {p.dosage    !== 'Not specified' && <Text style={ss.actionMetaText}>💊 {p.dosage}</Text>}
-                  {p.frequency !== 'Not specified' && <Text style={ss.actionMetaText}>🔁 {p.frequency}</Text>}
-                  {p.duration  !== 'Not specified' && <Text style={ss.actionMetaText}>⏱ {p.duration}</Text>}
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
+        {data.prescription?.length > 0 && <View style={ss.block}><SectionLabel icon="💊" text="Prescription" color="#DC2626" />{data.prescription.map((p, i) => <View key={i} style={[ss.actionRow, i % 2 === 0 ? ss.actionEven : ss.actionOdd]}><Text style={[ss.medicineName, { color: '#DC2626' }]}>{p.medicine}</Text><View style={ss.actionMeta}>{p.dosage !== 'Not specified' && <Text style={ss.actionMetaText}>💊 {p.dosage}</Text>}{p.frequency !== 'Not specified' && <Text style={ss.actionMetaText}>🔁 {p.frequency}</Text>}{p.duration !== 'Not specified' && <Text style={ss.actionMetaText}>⏱ {p.duration}</Text>}</View></View>)}</View>}
         <HighlightBox icon="📅" label="Follow-up" value={data.followup_date} bg="#FEF2F2" color="#DC2626" />
       </>}
-
-      {/* ── LEGAL ── */}
       {mode === 'legal' && <>
         <HighlightBox icon="👤" label="Client" value={data.client_details} bg="#FFFBEB" color="#92400E" />
-        {data.case_summary && (
-          <View style={[ss.plainBox, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}>
-            <Text style={[ss.plainBoxLabel, { color: '#92400E' }]}>📄 Case Summary</Text>
-            <Text style={ss.plainBoxText}>{data.case_summary}</Text>
-          </View>
-        )}
-        {data.action_items?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="📋" text="Action Items" color="#92400E" />
-            {data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}
-          </View>
-        )}
+        {data.case_summary && <View style={[ss.plainBox, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}><Text style={[ss.plainBoxLabel, { color: '#92400E' }]}>📄 Case Summary</Text><Text style={ss.plainBoxText}>{data.case_summary}</Text></View>}
+        {data.action_items?.length > 0 && <View style={ss.block}><SectionLabel icon="📋" text="Action Items" color="#92400E" />{data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}</View>}
         <HighlightBox icon="⚖️" label="Next Hearing" value={data.next_hearing_date} bg="#FFFBEB" color="#92400E" />
       </>}
-
-      {/* ── INTERVIEW ── */}
       {mode === 'interview' && <>
         <HighlightBox icon="👤" label="Candidate" value={data.candidate_name} bg="#F0F9FF" color="#0369A1" />
-        {data.key_answers?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="💬" text="Key Answers" color="#0369A1" />
-            {data.key_answers.map((a, i) => <BulletItem key={i} text={a} color="#0369A1" />)}
-          </View>
-        )}
-        {(data.evaluation?.strengths?.length > 0 || data.evaluation?.concerns?.length > 0) && (
-          <View style={ss.block}>
-            <SectionLabel icon="📊" text="Evaluation" color="#0369A1" />
-            {data.evaluation?.strengths?.length > 0 && (
-              <View style={ss.evalBlock}>
-                <Text style={ss.evalSubLabel}>✅ Strengths</Text>
-                {data.evaluation.strengths.map((s, i) => <BulletItem key={i} text={s} color="#059669" />)}
-              </View>
-            )}
-            {data.evaluation?.concerns?.length > 0 && (
-              <View style={[ss.evalBlock, { marginTop: 8 }]}>
-                <Text style={ss.evalSubLabel}>⚠️ Concerns</Text>
-                {data.evaluation.concerns.map((c, i) => <BulletItem key={i} text={c} color="#DC2626" />)}
-              </View>
-            )}
-          </View>
-        )}
+        {data.key_answers?.length > 0 && <View style={ss.block}><SectionLabel icon="💬" text="Key Answers" color="#0369A1" />{data.key_answers.map((a, i) => <BulletItem key={i} text={a} color="#0369A1" />)}</View>}
+        {(data.evaluation?.strengths?.length > 0 || data.evaluation?.concerns?.length > 0) && <View style={ss.block}><SectionLabel icon="📊" text="Evaluation" color="#0369A1" />{data.evaluation?.strengths?.length > 0 && <View style={ss.evalBlock}><Text style={ss.evalSubLabel}>✅ Strengths</Text>{data.evaluation.strengths.map((s, i) => <BulletItem key={i} text={s} color="#059669" />)}</View>}{data.evaluation?.concerns?.length > 0 && <View style={[ss.evalBlock, { marginTop: 8 }]}><Text style={ss.evalSubLabel}>⚠️ Concerns</Text>{data.evaluation.concerns.map((c, i) => <BulletItem key={i} text={c} color="#DC2626" />)}</View>}</View>}
         <HighlightBox icon="🎯" label="Decision" value={data.decision} bg="#F0F9FF" color="#0369A1" />
       </>}
-
-      {/* ── MEETING — add key_points ── */}
-      {mode === 'meeting' && data.key_points?.length > 0 && (
-        <View style={ss.block}>
-          <SectionLabel icon="💬" text="Key Points Discussed" />
-          {data.key_points.map((p, i) => <BulletItem key={i} text={p} />)}
-        </View>
-      )}
-
-      {/* ── SALES — add deal_stage ── */}
-      {mode === 'sales' && data.deal_stage && (
-        <View style={[ss.highlightBox, { backgroundColor: '#ECFDF5', borderColor: '#059669' }]}>
-          <Text style={[ss.highlightLabel, { color: '#059669' }]}>📊 Deal Stage</Text>
-          <Text style={ss.highlightValue}>{data.deal_stage}</Text>
-        </View>
-      )}
-
-      {/* ── DOCTOR — add tests_ordered and advice ── */}
-      {mode === 'doctor' && data.tests_ordered?.length > 0 && (
-        <View style={ss.block}>
-          <SectionLabel icon="🧪" text="Tests Ordered" color="#DC2626" />
-          {data.tests_ordered.map((t, i) => <BulletItem key={i} text={t} color="#DC2626" />)}
-        </View>
-      )}
-      {mode === 'doctor' && data.advice?.length > 0 && (
-        <View style={ss.block}>
-          <SectionLabel icon="💬" text="Doctor's Advice" color="#DC2626" />
-          {data.advice.map((a, i) => <BulletItem key={i} text={a} color="#DC2626" />)}
-        </View>
-      )}
-
-      {/* ── LEGAL — add key_points ── */}
-      {mode === 'legal' && data.key_points?.length > 0 && (
-        <View style={ss.block}>
-          <SectionLabel icon="📌" text="Key Legal Points" color="#92400E" />
-          {data.key_points.map((p, i) => <BulletItem key={i} text={p} color="#92400E" />)}
-        </View>
-      )}
-
-      {/* ── INTERVIEW — add role and cultural_fit ── */}
-      {mode === 'interview' && data.role && data.role !== 'Not mentioned' && (
-        <View style={[ss.highlightBox, { backgroundColor: '#F0F9FF', borderColor: '#0369A1' }]}>
-          <Text style={[ss.highlightLabel, { color: '#0369A1' }]}>💼 Role</Text>
-          <Text style={ss.highlightValue}>{data.role}</Text>
-        </View>
-      )}
-      {mode === 'interview' && data.cultural_fit && (
-        <View style={[ss.plainBox, { backgroundColor: '#F0F9FF', borderColor: '#BAE6FD' }]}>
-          <Text style={[ss.plainBoxLabel, { color: '#0369A1' }]}>🤝 Cultural Fit</Text>
-          <Text style={ss.plainBoxText}>{data.cultural_fit}</Text>
-        </View>
-      )}
-
-      {/* ── LECTURE — add important_points and assignments ── */}
-      {mode === 'lecture' && data.important_points?.length > 0 && (
-        <View style={ss.block}>
-          <SectionLabel icon="📌" text="Important Points" color="#7C3AED" />
-          {data.important_points.map((p, i) => <BulletItem key={i} text={p} color="#7C3AED" />)}
-        </View>
-      )}
-      {mode === 'lecture' && data.assignments?.length > 0 && (
-        <View style={ss.block}>
-          <SectionLabel icon="📝" text="Assignments / Deadlines" color="#7C3AED" />
-          {data.assignments.map((a, i) => <BulletItem key={i} text={a} color="#7C3AED" />)}
-        </View>
-      )}
-
-      {/* ── DEFAULT / OTHER / AUTO ── */}
       {(!mode || !TEMPLATE_MAP[mode] || mode === 'other' || mode === 'auto') && <>
-        {data.key_points?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="💡" text="Key Points" />
-            {data.key_points.map((p, i) => <BulletItem key={i} text={p} />)}
-          </View>
-        )}
-        {data.action_items?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="📋" text="Action Items" />
-            {data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}
-          </View>
-        )}
-        {data.decisions?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="✅" text="Decisions" />
-            {data.decisions.map((d, i) => <BulletItem key={i} text={d} />)}
-          </View>
-        )}
-        {data.follow_up?.length > 0 && (
-          <View style={ss.block}>
-            <SectionLabel icon="🔄" text="Follow Up" />
-            {data.follow_up.map((f, i) => <BulletItem key={i} text={f} />)}
-          </View>
-        )}
+        {data.key_points?.length > 0 && <View style={ss.block}><SectionLabel icon="💡" text="Key Points" />{data.key_points.map((p, i) => <BulletItem key={i} text={p} />)}</View>}
+        {data.action_items?.length > 0 && <View style={ss.block}><SectionLabel icon="📋" text="Action Items" />{data.action_items.map((item, i) => <ActionRow key={i} item={item} index={i} />)}</View>}
+        {data.decisions?.length > 0 && <View style={ss.block}><SectionLabel icon="✅" text="Decisions" />{data.decisions.map((d, i) => <BulletItem key={i} text={d} />)}</View>}
+        {data.follow_up?.length > 0 && <View style={ss.block}><SectionLabel icon="🔄" text="Follow Up" />{data.follow_up.map((f, i) => <BulletItem key={i} text={f} />)}</View>}
       </>}
     </View>
   );
 };
 
-// Structured summary styles
+// Legacy styles (unchanged)
 const ss = StyleSheet.create({
-  summaryLine:      { borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 8,
-                      marginBottom: 14, backgroundColor: '#FAFAFA', borderRadius: 4 },
+  summaryLine:      { borderLeftWidth: 3, paddingLeft: 12, paddingVertical: 8, marginBottom: 14, backgroundColor: '#FAFAFA', borderRadius: 4 },
   summaryLineText:  { fontSize: 14, color: '#374151', lineHeight: 22, fontStyle: 'italic' },
   block:            { marginBottom: 16 },
   sectionLabel:     { borderLeftWidth: 3, paddingLeft: 10, marginBottom: 8 },
@@ -359,26 +487,22 @@ const ss = StyleSheet.create({
   bulletRow:        { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6, paddingLeft: 4 },
   bullet:           { width: 6, height: 6, borderRadius: 3, marginTop: 7, marginRight: 8 },
   bulletText:       { flex: 1, fontSize: 13, color: '#374151', lineHeight: 20 },
-  actionRow:        { flexDirection: 'row', alignItems: 'flex-start',
-                      paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, marginBottom: 4 },
+  actionRow:        { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, marginBottom: 4 },
   actionEven:       { backgroundColor: '#F8FAFC' },
   actionOdd:        { backgroundColor: '#F1F5F9' },
-  actionNum:        { width: 20, height: 20, borderRadius: 10, alignItems: 'center',
-                      justifyContent: 'center', marginRight: 8, marginTop: 1 },
+  actionNum:        { width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 8, marginTop: 1 },
   actionNumText:    { color: '#fff', fontSize: 10, fontWeight: '700' },
   actionContent:    { flex: 1 },
   actionTask:       { fontSize: 13, color: '#1E293B', fontWeight: '600', marginBottom: 3 },
   actionMeta:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   actionMetaText:   { fontSize: 11, color: '#64748B' },
   highlightBox:     { borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 10 },
-  highlightLabel:   { fontSize: 11, fontWeight: '700', textTransform: 'uppercase',
-                      letterSpacing: 0.5, marginBottom: 3 },
+  highlightLabel:   { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
   highlightValue:   { fontSize: 14, color: '#1E293B', fontWeight: '500' },
   plainBox:         { borderWidth: 1, borderRadius: 8, padding: 12, marginBottom: 10 },
   plainBoxLabel:    { fontSize: 12, fontWeight: '700', marginBottom: 6 },
   plainBoxText:     { fontSize: 13, color: '#374151', lineHeight: 20 },
-  defBox:           { borderLeftWidth: 3, paddingLeft: 10, paddingVertical: 6,
-                      backgroundColor: '#F8FAFC', borderRadius: 4, marginBottom: 8 },
+  defBox:           { borderLeftWidth: 3, paddingLeft: 10, paddingVertical: 6, backgroundColor: '#F8FAFC', borderRadius: 4, marginBottom: 8 },
   defTerm:          { fontSize: 13, fontWeight: '700', marginBottom: 2 },
   defMeaning:       { fontSize: 12, color: '#4B5563', lineHeight: 18 },
   questionRow:      { flexDirection: 'row', marginBottom: 8 },
@@ -386,19 +510,12 @@ const ss = StyleSheet.create({
   questionText:     { flex: 1, fontSize: 13, color: '#374151', lineHeight: 20 },
   medicineName:     { fontSize: 13, fontWeight: '700', marginBottom: 3, flex: 1 },
   evalBlock:        { backgroundColor: '#F8FAFC', borderRadius: 8, padding: 8 },
-  evalSubLabel:     { fontSize: 11, fontWeight: '700', color: '#64748B',
-                      marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 },
+  evalSubLabel:     { fontSize: 11, fontWeight: '700', color: '#64748B', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 },
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SPEAKER_COLORS = [
-  '#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF',
-  '#C0392B', '#0097A7', '#795548', '#E91E63'
-];
-const SPEAKER_BG = [
-  '#E8F0FC', '#E8F5EE', '#FEF3E8', '#F3E8FE',
-  '#FDE8E8', '#E0F7FA', '#F3EDEB', '#FCE4EC'
-];
+const SPEAKER_COLORS = ['#1A56A0', '#1A7A4A', '#C85A00', '#8B1AAF', '#C0392B', '#0097A7', '#795548', '#E91E63'];
+const SPEAKER_BG     = ['#E8F0FC', '#E8F5EE', '#FEF3E8', '#F3E8FE', '#FDE8E8', '#E0F7FA', '#F3EDEB', '#FCE4EC'];
 const getSpeakerIndex = (speaker) => {
   const lastChar  = speaker?.slice(-1)?.toUpperCase() || 'A';
   const code      = lastChar.charCodeAt(0);
@@ -423,6 +540,10 @@ export default function TranscriptScreen({ route }) {
   const [generatingEmail,  setGeneratingEmail]  = useState(false);
   const [sharingWhatsApp,  setSharingWhatsApp]  = useState(false);
 
+  // ── NEW: Export modal state ────────────────────────────────────────────────
+  const [showExportModal,  setShowExportModal]  = useState(false);
+  const [exportChoice,     setExportChoice]     = useState(null); // 'summary' | 'transcript' | 'both'
+
   const [utterances,      setUtterances]      = useState(transcript.utterances || []);
   const [renamingModal,   setRenamingModal]   = useState(false);
   const [renamingSpeaker, setRenamingSpeaker] = useState('');
@@ -440,15 +561,13 @@ export default function TranscriptScreen({ route }) {
   const flatListRef = useRef(null);
   const inputRef    = useRef(null);
 
-  const hasTranslation = transcript.englishText &&
-    transcript.englishText !== transcript.text;
+  const hasTranslation = transcript.englishText && transcript.englishText !== transcript.text;
+  const templateInfo   = TEMPLATE_MAP[transcript.mode] || null;
 
-  const templateInfo = TEMPLATE_MAP[transcript.mode] || null;
-
-  // Determine if current summary is structured JSON or plain text
-  const isStructuredSummary = useMemo(() => {
-    return parseStructuredSummary(summary) !== null;
-  }, [summary]);
+  // Determine if summary uses new 11-section format or old format
+  const parsedSummary   = useMemo(() => parseStructuredSummary(summary), [summary]);
+  const summaryIsNew    = useMemo(() => isNewFormat(parsedSummary), [parsedSummary]);
+  const summaryIsLegacy = useMemo(() => parsedSummary !== null && !summaryIsNew, [parsedSummary, summaryIsNew]);
 
   const handleSpeakerTap = (speaker) => {
     setRenamingSpeaker(speaker);
@@ -498,7 +617,8 @@ export default function TranscriptScreen({ route }) {
     setSavingTitle(false);
   };
 
-  // ─── Copy AI Notes only to clipboard ──────────────────────────────────────
+  // ─── Copy AI Notes to clipboard ───────────────────────────────────────────
+  // Updated to handle both new 11-section format and old format
   const copyAINotes = async () => {
     const activeSummary = summary || transcript.autoSummary;
     if (!activeSummary) {
@@ -511,13 +631,50 @@ export default function TranscriptScreen({ route }) {
       text += `📅 ${formatDate(transcript.createdAt)}\n`;
       text += `${'─'.repeat(40)}\n\n`;
 
-      if (parsed) {
-        if (parsed.summary)            text += `📌 Summary\n${parsed.summary}\n\n`;
-        if (parsed.key_points?.length) text += `💡 Key Points\n${parsed.key_points.map((p,i) => `${i+1}. ${p}`).join('\n')}\n\n`;
-        if (parsed.key_decisions?.length) text += `✅ Key Decisions\n${parsed.key_decisions.map((d,i) => `${i+1}. ${d}`).join('\n')}\n\n`;
+      if (parsed && isNewFormat(parsed)) {
+        // ── New 11-section format ──────────────────────────────────────────
+        const es = parsed.executive_summary;
+        if (es?.main_purpose)          text += `📌 PURPOSE\n${es.main_purpose}\n\n`;
+        if (es?.core_themes?.length)   text += `🗂 THEMES\n${es.core_themes.join(' • ')}\n\n`;
+        if (es?.major_conclusions?.length) text += `📊 CONCLUSIONS\n${es.major_conclusions.map((c,i)=>`${i+1}. ${c}`).join('\n')}\n\n`;
+
+        if (parsed.key_points?.length) {
+          text += `💡 KEY POINTS\n`;
+          parsed.key_points.forEach(k => { text += `${k.number}. ${k.key_point}\n`; });
+          text += '\n';
+        }
+        if (parsed.decisions_taken?.length) {
+          text += `✅ DECISIONS\n`;
+          parsed.decisions_taken.forEach((d,i) => { text += `${i+1}. ${d.decision} (Owner: ${d.owner})\n`; });
+          text += '\n';
+        }
+        if (parsed.action_items?.length) {
+          text += `🎯 ACTION ITEMS\n`;
+          parsed.action_items.forEach((a,i) => {
+            text += `${i+1}. ${a.action} — ${a.owner} | Due: ${a.deadline}\n`;
+          });
+          text += '\n';
+        }
+        if (parsed.open_questions?.length) {
+          text += `❓ OPEN QUESTIONS\n`;
+          parsed.open_questions.forEach((q,i) => { text += `${i+1}. ${q.question}\n`; });
+          text += '\n';
+        }
+        if (parsed.important_highlights?.length) {
+          text += `⭐ HIGHLIGHTS\n${parsed.important_highlights.map((h,i)=>`${i+1}. ${h}`).join('\n')}\n\n`;
+        }
+        if (parsed.one_page_brief) {
+          const b = parsed.one_page_brief;
+          text += `📄 ONE-PAGE BRIEF\nPurpose: ${b.purpose}\nDecisions: ${b.decisions}\nActions: ${b.actions}\nRisks: ${b.risks}\nPending: ${b.pending_items}\n\n`;
+        }
+      } else if (parsed) {
+        // ── Old format ────────────────────────────────────────────────────
+        if (parsed.summary)              text += `📌 Summary\n${parsed.summary}\n\n`;
+        if (parsed.key_points?.length)   text += `💡 Key Points\n${parsed.key_points.map((p,i)=>`${i+1}. ${p}`).join('\n')}\n\n`;
+        if (parsed.key_decisions?.length) text += `✅ Key Decisions\n${parsed.key_decisions.map((d,i)=>`${i+1}. ${d}`).join('\n')}\n\n`;
         if (parsed.action_items?.length) {
           text += `📋 Action Items\n`;
-          parsed.action_items.forEach((item, i) => {
+          parsed.action_items.forEach((item,i) => {
             text += `${i+1}. ${item.task}`;
             if (item.owner && item.owner !== 'Unassigned') text += ` — ${item.owner}`;
             if (item.deadline && item.deadline !== 'Not mentioned') text += ` (${item.deadline})`;
@@ -525,28 +682,11 @@ export default function TranscriptScreen({ route }) {
           });
           text += '\n';
         }
-        if (parsed.next_meeting_date && parsed.next_meeting_date !== 'Not mentioned')
-          text += `📅 Next Meeting: ${parsed.next_meeting_date}\n\n`;
-        if (parsed.decisions?.length)  text += `✅ Decisions\n${parsed.decisions.map((d,i) => `${i+1}. ${d}`).join('\n')}\n\n`;
-        if (parsed.follow_up?.length)  text += `🔄 Follow Up\n${parsed.follow_up.map((f,i) => `${i+1}. ${f}`).join('\n')}\n\n`;
-        if (parsed.requirements?.length) text += `🎯 Requirements\n${parsed.requirements.map((r,i) => `${i+1}. ${r}`).join('\n')}\n\n`;
-        if (parsed.next_steps?.length) text += `🚀 Next Steps\n${parsed.next_steps.map((s,i) => `${i+1}. ${s}`).join('\n')}\n\n`;
       } else {
         text += activeSummary;
       }
 
-      // Also add action items from transcript if present
-      if (transcript.actionItems?.length > 0 && !parsed?.action_items?.length) {
-        text += `📋 Action Items\n`;
-        transcript.actionItems.forEach((item, i) => {
-          text += `${i+1}. ${item.task}`;
-          if (item.owner)    text += ` — ${item.owner}`;
-          if (item.deadline) text += ` (${item.deadline})`;
-          text += '\n';
-        });
-      }
-
-      text += `\n_Generated by VoxNote AI_`;
+      text += `_Generated by VoxNote AI_`;
       await Clipboard.setStringAsync(text);
       Alert.alert('✅ Copied!', 'AI notes copied to clipboard. Paste anywhere.');
     } catch (err) {
@@ -554,7 +694,277 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  // ─── Export Meeting Minutes PDF (AI notes + action items only) ──────────
+  // ─── Helper: build 11-section HTML for PDF ────────────────────────────────
+  const build11SectionHTML = (parsed) => {
+    if (!parsed || !isNewFormat(parsed)) return '';
+    const arr = (a) => Array.isArray(a) && a.length > 0;
+    const val = (v) => v && v !== 'Not specified' && v !== 'None identified.' && v !== 'None identified';
+
+    const sec = (title, content) =>
+      `<div style="margin-bottom:22px;">
+         <div style="font-size:14px;font-weight:700;color:#0D3B7A;border-bottom:2px solid #1A56A0;padding-bottom:5px;margin-bottom:10px;">${title}</div>
+         ${content}
+       </div>`;
+
+    const fieldRow = (label, value) =>
+      val(value) ? `<div style="margin-bottom:8px;"><div style="font-size:10px;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;">${label}</div><div style="font-size:13px;color:#1F2937;line-height:1.6;">${value}</div></div>` : '';
+
+    const ul = (items, color = '#374151') =>
+      arr(items) ? `<ul style="margin:0;padding-left:18px;">${items.map(i=>`<li style="font-size:13px;color:${color};margin-bottom:4px;line-height:1.5;">${i}</li>`).join('')}</ul>`
+                 : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">None identified.</p>`;
+
+    const table = (headers, rows, emptyMsg = 'None identified.') => {
+      if (!arr(rows)) return `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">${emptyMsg}</p>`;
+      const th = headers.map(h=>`<th style="padding:7px 10px;background:#1A56A0;color:#fff;text-align:left;font-size:12px;">${h}</th>`).join('');
+      const tr = rows.map((r,i)=>`<tr style="background:${i%2===0?'#fff':'#F9FAFB'};">${Object.values(r).map(v=>`<td style="padding:7px 10px;border-bottom:1px solid #E5E7EB;font-size:12px;color:#374151;">${v||'Not specified'}</td>`).join('')}</tr>`).join('');
+      return `<table style="width:100%;border-collapse:collapse;"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+    };
+
+    const es = parsed.executive_summary || {};
+    let html = '';
+
+    // 1. Executive Summary
+    html += sec('1. Executive Summary',
+      fieldRow('Main Purpose', es.main_purpose) +
+      fieldRow('Core Themes', arr(es.core_themes) ? es.core_themes.join(' &bull; ') : '') +
+      (arr(es.major_conclusions) ? `<div style="margin-bottom:8px;"><div style="font-size:10px;font-weight:700;color:#9CA3AF;text-transform:uppercase;margin-bottom:4px;">Major Conclusions</div>${ul(es.major_conclusions,'#1A56A0')}</div>` : '') +
+      (arr(es.key_outcomes) ? `<div><div style="font-size:10px;font-weight:700;color:#9CA3AF;text-transform:uppercase;margin-bottom:4px;">Key Outcomes</div>${ul(es.key_outcomes,'#1A7A4A')}</div>` : '')
+    );
+
+    // 2. Detailed Summary
+    html += sec('2. Detailed Summary',
+      arr(parsed.detailed_summary)
+        ? parsed.detailed_summary.map(s=>`
+            <div style="border-left:3px solid #1A56A0;padding-left:10px;margin-bottom:12px;">
+              <div style="font-size:13px;font-weight:700;color:#1A56A0;margin-bottom:2px;">${s.topic||''}</div>
+              ${val(s.speaker)?`<div style="font-size:11px;color:#7C3AED;margin-bottom:3px;">${s.speaker}</div>`:''}
+              <div style="font-size:13px;color:#374151;line-height:1.5;">${s.what_was_said||''}</div>
+            </div>`).join('')
+        : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">None identified.</p>`
+    );
+
+    // 3. Key Points
+    html += sec('3. Key Points / Core Insights',
+      arr(parsed.key_points)
+        ? `<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="padding:7px 10px;background:#1A56A0;color:#fff;text-align:left;font-size:12px;width:36px;">#</th><th style="padding:7px 10px;background:#1A56A0;color:#fff;text-align:left;font-size:12px;">Key Point</th><th style="padding:7px 10px;background:#1A56A0;color:#fff;text-align:left;font-size:12px;">Supporting Context</th></tr></thead><tbody>${parsed.key_points.map((k,i)=>`<tr style="background:${i%2===0?'#fff':'#F9FAFB'};"><td style="padding:7px 10px;border-bottom:1px solid #E5E7EB;font-size:12px;font-weight:700;color:#1A56A0;">${k.number||i+1}</td><td style="padding:7px 10px;border-bottom:1px solid #E5E7EB;font-size:12px;color:#1F2937;">${k.key_point||''}</td><td style="padding:7px 10px;border-bottom:1px solid #E5E7EB;font-size:12px;color:#6B7280;">${k.supporting_context||''}</td></tr>`).join('')}</tbody></table>`
+        : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">None identified.</p>`
+    );
+
+    // 4. Decisions
+    html += sec('4. Decisions Taken',
+      table(['Decision','Owner','Context'],
+        (parsed.decisions_taken||[]).map(d=>({Decision:d.decision,Owner:d.owner,Context:d.context})),
+        'No explicit decisions identified.')
+    );
+
+    // 5. Action Items
+    html += sec('5. Action Items / Follow-Up Tasks',
+      arr(parsed.action_items)
+        ? `<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="padding:7px 10px;background:#E65100;color:#fff;text-align:left;font-size:12px;">Action Item</th><th style="padding:7px 10px;background:#E65100;color:#fff;text-align:left;font-size:12px;width:100px;">Owner</th><th style="padding:7px 10px;background:#E65100;color:#fff;text-align:left;font-size:12px;width:100px;">Deadline</th><th style="padding:7px 10px;background:#E65100;color:#fff;text-align:left;font-size:12px;width:100px;">Dependency</th></tr></thead><tbody>${parsed.action_items.map((a,i)=>`<tr style="background:${i%2===0?'#FFF8F0':'#FFF3E0'};"><td style="padding:7px 10px;border-bottom:1px solid #FFE0B2;font-size:12px;color:#1F2937;font-weight:500;">${a.action||''}</td><td style="padding:7px 10px;border-bottom:1px solid #FFE0B2;font-size:12px;color:#6B7280;">${a.owner||'Not specified'}</td><td style="padding:7px 10px;border-bottom:1px solid #FFE0B2;font-size:12px;color:#6B7280;">${a.deadline||'Not specified'}</td><td style="padding:7px 10px;border-bottom:1px solid #FFE0B2;font-size:12px;color:#6B7280;">${a.dependency||'Not specified'}</td></tr>`).join('')}</tbody></table>`
+        : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">No action items identified.</p>`
+    );
+
+    // 6. Open Questions
+    html += sec('6. Open Questions / Unresolved Issues',
+      arr(parsed.open_questions)
+        ? `<ul style="margin:0;padding-left:18px;">${parsed.open_questions.map(q=>`<li style="font-size:13px;color:#374151;margin-bottom:5px;line-height:1.5;">${q.question} <span style="color:#9CA3AF;font-size:11px;">(${q.status||'Unresolved'})</span></li>`).join('')}</ul>`
+        : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">None identified.</p>`
+    );
+
+    // 7. Risks
+    html += sec('7. Risks / Concerns Mentioned',
+      table(['Risk / Concern','Mentioned By','Context'],
+        (parsed.risks_concerns||[]).map(r=>({'Risk / Concern':r.risk,'Mentioned By':r.mentioned_by,'Context':r.context})))
+    );
+
+    // 8. Highlights
+    html += sec('8. Important Highlights', ul(parsed.important_highlights, '#7C3AED'));
+
+    // 9. Quotes
+    html += sec('9. Quotes Worth Retaining',
+      arr(parsed.quotes_worth_retaining)
+        ? parsed.quotes_worth_retaining.map(q=>`
+            <div style="border-left:4px solid #7C3AED;background:#F5F3FF;padding:10px 12px;border-radius:0 6px 6px 0;margin-bottom:8px;">
+              <div style="font-size:13px;color:#4C1D95;font-style:italic;line-height:1.5;">"${q.quote}"</div>
+              <div style="font-size:11px;color:#7C3AED;margin-top:4px;">— ${q.speaker}</div>
+            </div>`).join('')
+        : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">No notable quotes identified.</p>`
+    );
+
+    // 10. Missing Info
+    html += sec('10. Missing Information / Ambiguities',
+      arr(parsed.missing_information)
+        ? `<ul style="margin:0;padding-left:18px;">${parsed.missing_information.map(m=>`<li style="font-size:13px;color:#374151;margin-bottom:5px;"><strong>${m.area}:</strong> ${m.issue}</li>`).join('')}</ul>`
+        : `<p style="font-size:12px;color:#9CA3AF;font-style:italic;">None identified.</p>`
+    );
+
+    // 11. One-Page Brief
+    if (parsed.one_page_brief) {
+      const b = parsed.one_page_brief;
+      html += sec('11. One-Page Condensed Brief',
+        `<div style="background:#EFF6FF;border-radius:8px;padding:14px;border:1px solid #BFDBFE;">
+           <table style="width:100%;border-collapse:collapse;">
+             ${[['Purpose',b.purpose],['Decisions',b.decisions],['Actions',b.actions],['Risks',b.risks],['Pending Items',b.pending_items]]
+               .map(([k,v])=>`<tr><td style="padding:7px 8px;font-size:12px;font-weight:700;color:#1A56A0;width:100px;border-bottom:1px solid #DBEAFE;white-space:nowrap;">${k}</td><td style="padding:7px 8px;font-size:12px;color:#374151;border-bottom:1px solid #DBEAFE;line-height:1.5;">${v||'None identified.'}</td></tr>`).join('')}
+           </table>
+         </div>`
+      );
+    }
+
+    return html;
+  };
+
+  // ─── exportAsPDF — now with type: 'summary' | 'transcript' | 'both' ────────
+  const exportAsPDF = async (type = 'both') => {
+    try {
+      setExportingPDF(true);
+      const activeSummary  = summary || transcript.autoSummary;
+      const parsed         = parseStructuredSummary(activeSummary);
+      const date           = formatDate(transcript.createdAt);
+      const duration       = transcript.duration ? Math.round(transcript.duration / 60) + ' min' : 'N/A';
+      const words          = transcript.wordCount || 0;
+      const lang           = getLangBadge();
+      const title          = currentTitle || transcript.title;
+      const includeSummary    = type === 'summary'    || type === 'both';
+      const includeTranscript = type === 'transcript' || type === 'both';
+
+      // ── Summary HTML ────────────────────────────────────────────────────────
+      let summaryHTML = '';
+      if (includeSummary && activeSummary) {
+        if (parsed && isNewFormat(parsed)) {
+          // New 11-section format
+          summaryHTML = `
+            <div class="section">
+              <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Notes (11-Section Analysis)</div>
+              ${build11SectionHTML(parsed)}
+            </div>`;
+        } else if (parsed) {
+          // Old format — render key fields
+          let fieldsHTML = '';
+          if (parsed.summary)              fieldsHTML += `<p style="font-style:italic;color:#555;font-size:14px;margin-bottom:14px;">${parsed.summary}</p>`;
+          if (parsed.key_points?.length)   fieldsHTML += `<div style="font-weight:700;color:#374151;margin:10px 0 6px;">💡 Key Points</div>${parsed.key_points.map(p=>`<div style="padding:4px 0 4px 12px;border-left:3px solid #374151;margin-bottom:4px;font-size:13px;">${p}</div>`).join('')}`;
+          if (parsed.key_decisions?.length) fieldsHTML += `<div style="font-weight:700;color:#1A56A0;margin:10px 0 6px;">✅ Key Decisions</div>${parsed.key_decisions.map(d=>`<div style="padding:4px 0 4px 12px;border-left:3px solid #1A56A0;margin-bottom:4px;font-size:13px;">${d}</div>`).join('')}`;
+          if (parsed.action_items?.length) {
+            fieldsHTML += `<div style="font-weight:700;color:#E65100;margin:10px 0 6px;">🎯 Action Items</div>`;
+            fieldsHTML += parsed.action_items.map(a=>`<div style="padding:4px 0 4px 12px;border-left:3px solid #E65100;margin-bottom:4px;font-size:13px;"><strong>${a.task}</strong>${a.owner?' — '+a.owner:''}${a.deadline?' ('+a.deadline+')':''}</div>`).join('');
+          }
+          summaryHTML = `<div class="section"><div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div><div style="background:#F0FAF4;padding:16px;border-radius:8px;">${fieldsHTML}</div></div>`;
+        } else {
+          // Plain text
+          summaryHTML = `<div class="section"><div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div><div style="background:#F0FAF4;padding:16px;border-radius:8px;font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">${activeSummary}</div></div>`;
+        }
+      }
+
+      // ── Action Items HTML (from transcript.actionItems, only if not already in 11-section) ──
+      let actionItemsHTML = '';
+      const hasNewActionItems = parsed && isNewFormat(parsed) && parsed.action_items?.length > 0;
+      if (includeSummary && !hasNewActionItems && transcript.actionItems?.length > 0) {
+        const rows = transcript.actionItems.map((item, i) => `
+          <tr>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;font-weight:600;color:#E65100;">${i + 1}</td>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#333;">${item.task}</td>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
+            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
+          </tr>`).join('');
+        actionItemsHTML = `
+          <div class="section">
+            <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">✅ Action Items</div>
+            <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;overflow:hidden;">
+              <thead><tr style="background:#FF9800;">
+                <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
+                <th style="padding:10px;color:#fff;text-align:left;">Task</th>
+                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
+                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>`;
+      }
+
+      // ── Transcript HTML ─────────────────────────────────────────────────────
+      let transcriptHTML = '';
+      if (includeTranscript) {
+        if (utterances.length > 0) {
+          const utterancesHTML = utterances.map((u) => {
+            const idx   = getSpeakerIndex(u.speaker);
+            const start = formatTime(u.start);
+            const end   = formatTime(u.end);
+            return `
+              <div style="background:${SPEAKER_BG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                  <span style="background:${SPEAKER_COLORS[idx]};color:#fff;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
+                  <span style="font-size:11px;color:#888;">${start} — ${end}</span>
+                </div>
+                <div style="font-size:14px;color:#333;line-height:1.7;">${u.englishText || u.text}</div>
+                ${u.englishText && u.englishText !== u.text ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>` : ''}
+              </div>`;
+          }).join('');
+          transcriptHTML = `
+            <div class="section" style="${includeSummary ? 'page-break-before:always;' : ''}">
+              <div class="section-title">🎙 Speaker Transcript</div>
+              ${utterancesHTML}
+            </div>`;
+        } else {
+          transcriptHTML = `
+            <div class="section" style="${includeSummary ? 'page-break-before:always;' : ''}">
+              <div class="section-title">📝 Full Transcript</div>
+              <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">${transcript.englishText || transcript.text}</div>
+            </div>`;
+        }
+      }
+
+      const html = `<!DOCTYPE html><html>
+        <head>
+          <meta charset="utf-8"/>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+          <style>
+            * { margin:0; padding:0; box-sizing:border-box; }
+            body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#fff; color:#333; }
+            .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0); color:white; padding:32px 40px; }
+            .logo { font-size:13px; font-weight:700; letter-spacing:2px; color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
+            .title { font-size:24px; font-weight:800; margin-bottom:16px; line-height:1.3; }
+            .meta-grid { display:flex; gap:24px; flex-wrap:wrap; }
+            .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px; border-radius:8px; font-size:12px; }
+            .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px; }
+            .meta-value { color:#fff; font-weight:600; }
+            .body { padding:32px 40px; }
+            .section { margin-bottom:32px; }
+            .section-title { font-size:16px; font-weight:700; color:#0D3B7A; margin-bottom:16px; padding-left:12px; border-left:4px solid #1A56A0; }
+            .footer { margin-top:40px; padding:20px 40px; border-top:1px solid #EEE; text-align:center; font-size:11px; color:#AAA; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="logo">VoxNote — AI Transcription</div>
+            <div class="title">${title}</div>
+            <div class="meta-grid">
+              <div class="meta-item"><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
+              <div class="meta-item"><div class="meta-label">Duration</div><div class="meta-value">${duration}</div></div>
+              <div class="meta-item"><div class="meta-label">Words</div><div class="meta-value">${words}</div></div>
+              <div class="meta-item"><div class="meta-label">Language</div><div class="meta-value">${lang}</div></div>
+              <div class="meta-item"><div class="meta-label">Folder</div><div class="meta-value">${currentFolder}</div></div>
+            </div>
+          </div>
+          <div class="body">${summaryHTML}${actionItemsHTML}${transcriptHTML}</div>
+          <div class="footer">Generated by VoxNote AI Transcription • ${new Date().toLocaleDateString('en-IN')}</div>
+        </body></html>`;
+
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Share or Save PDF', UTI: 'com.adobe.pdf' });
+      } else {
+        Alert.alert('PDF Created', 'Saved to: ' + uri);
+      }
+    } catch (err) {
+      console.error('PDF export error:', err);
+      Alert.alert('Error', 'Could not generate PDF: ' + err.message);
+    } finally {
+      setExportingPDF(false);
+    }
+  };
+
+  // ─── exportMinutesPDF — updated for 11-section format ────────────────────
   const exportMinutesPDF = async () => {
     const activeSummary = summary || transcript.autoSummary;
     if (!activeSummary && !transcript.actionItems?.length) {
@@ -568,18 +978,18 @@ export default function TranscriptScreen({ route }) {
       const title    = currentTitle || transcript.title;
       const parsed   = parseStructuredSummary(activeSummary);
 
-      // Build summary section
       let summarySection = '';
-      if (parsed) {
+      if (parsed && isNewFormat(parsed)) {
+        // New 11-section — use the shared builder
+        summarySection = build11SectionHTML(parsed);
+      } else if (parsed) {
+        // Old format — render template-specific fields
         if (parsed.summary) {
           summarySection += `<div style="font-style:italic;color:#555;font-size:15px;line-height:1.7;margin-bottom:20px;padding:14px;background:#F8FAFC;border-radius:8px;border-left:4px solid #1A56A0;">${parsed.summary}</div>`;
         }
         const buildList = (items, color, icon, label) => {
           if (!items?.length) return '';
-          return `<div style="margin-bottom:20px;">
-            <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:10px;padding-left:10px;border-left:3px solid ${color};">${icon} ${label}</div>
-            ${items.map(item => `<div style="padding:6px 0 6px 16px;font-size:13px;color:#333;line-height:1.6;border-bottom:1px solid #F0F0F0;">• ${typeof item === 'string' ? item : item.task || JSON.stringify(item)}</div>`).join('')}
-          </div>`;
+          return `<div style="margin-bottom:20px;"><div style="font-size:14px;font-weight:700;color:${color};margin-bottom:10px;padding-left:10px;border-left:3px solid ${color};">${icon} ${label}</div>${items.map(item=>`<div style="padding:6px 0 6px 16px;font-size:13px;color:#333;line-height:1.6;border-bottom:1px solid #F0F0F0;">• ${typeof item==='string'?item:item.task||JSON.stringify(item)}</div>`).join('')}</div>`;
         };
         summarySection += buildList(parsed.key_points,    '#1A56A0', '💡', 'Key Points');
         summarySection += buildList(parsed.key_decisions, '#1A7A4A', '✅', 'Key Decisions');
@@ -587,8 +997,6 @@ export default function TranscriptScreen({ route }) {
         summarySection += buildList(parsed.requirements,  '#059669', '🎯', 'Requirements');
         summarySection += buildList(parsed.objections,    '#D97706', '⚠️', 'Objections');
         summarySection += buildList(parsed.next_steps,    '#059669', '🚀', 'Next Steps');
-        summarySection += buildList(parsed.follow_up,     '#6B7280', '🔄', 'Follow Up');
-
         if (parsed.next_meeting_date && parsed.next_meeting_date !== 'Not mentioned') {
           summarySection += `<div style="margin-bottom:20px;padding:12px 16px;background:#EFF6FF;border-radius:8px;border:1px solid #BFDBFE;font-size:13px;"><strong style="color:#1A56A0;">📅 Next Meeting:</strong> ${parsed.next_meeting_date}</div>`;
         }
@@ -596,8 +1004,8 @@ export default function TranscriptScreen({ route }) {
         summarySection = `<div style="font-size:13px;color:#333;line-height:1.8;white-space:pre-wrap;">${activeSummary}</div>`;
       }
 
-      // Build action items table
-      const actionItems = parsed?.action_items?.length ? parsed.action_items : (transcript.actionItems || []);
+      // Action items (from transcript.actionItems — the separately extracted list)
+      const actionItems = transcript.actionItems || [];
       let actionSection = '';
       if (actionItems.length > 0) {
         const rows = actionItems.map((item, i) => `
@@ -624,32 +1032,19 @@ export default function TranscriptScreen({ route }) {
 
       const html = `<!DOCTYPE html><html>
         <head><meta charset="utf-8"/>
-        <style>
-          * { margin:0; padding:0; box-sizing:border-box; }
-          body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#fff; }
-        </style></head>
+        <style>* { margin:0; padding:0; box-sizing:border-box; } body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#fff; }</style>
+        </head>
         <body>
           <div style="background:linear-gradient(135deg,#0D3B7A,#1A56A0);color:white;padding:32px 40px;">
             <div style="font-size:11px;font-weight:700;letter-spacing:2px;color:#AACFEE;margin-bottom:10px;text-transform:uppercase;">VoxNote — Minutes of Meeting</div>
             <div style="font-size:22px;font-weight:800;margin-bottom:14px;line-height:1.3;">${title}</div>
             <div style="display:flex;gap:16px;flex-wrap:wrap;">
-              <div style="background:rgba(255,255,255,0.15);padding:7px 13px;border-radius:7px;font-size:12px;">
-                <div style="color:#AACFEE;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Date</div>
-                <div style="color:#fff;font-weight:600;">${date}</div>
-              </div>
-              <div style="background:rgba(255,255,255,0.15);padding:7px 13px;border-radius:7px;font-size:12px;">
-                <div style="color:#AACFEE;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Duration</div>
-                <div style="color:#fff;font-weight:600;">${duration}</div>
-              </div>
+              <div style="background:rgba(255,255,255,0.15);padding:7px 13px;border-radius:7px;font-size:12px;"><div style="color:#AACFEE;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Date</div><div style="color:#fff;font-weight:600;">${date}</div></div>
+              <div style="background:rgba(255,255,255,0.15);padding:7px 13px;border-radius:7px;font-size:12px;"><div style="color:#AACFEE;font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Duration</div><div style="color:#fff;font-weight:600;">${duration}</div></div>
             </div>
           </div>
-          <div style="padding:32px 40px;">
-            ${summarySection}
-            ${actionSection}
-          </div>
-          <div style="margin-top:40px;padding:16px 40px;border-top:1px solid #EEE;text-align:center;font-size:11px;color:#AAA;">
-            Generated by VoxNote AI • ${new Date().toLocaleDateString('en-IN')}
-          </div>
+          <div style="padding:32px 40px;">${summarySection}${actionSection}</div>
+          <div style="margin-top:40px;padding:16px 40px;border-top:1px solid #EEE;text-align:center;font-size:11px;color:#AAA;">Generated by VoxNote AI • ${new Date().toLocaleDateString('en-IN')}</div>
         </body></html>`;
 
       const { uri } = await Print.printToFileAsync({ html, base64: false });
@@ -720,20 +1115,13 @@ export default function TranscriptScreen({ route }) {
   const generateShareLink = async () => {
     try {
       setSharingLink(true);
-      const response = await fetch(
-        'https://transcript-app-lbpe.onrender.com/share/generate',
-        {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ transcriptId: transcript.id }),
-        }
-      );
+      const response = await fetch('https://transcript-app-lbpe.onrender.com/share/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcriptId: transcript.id }),
+      });
       const data = await response.json();
       if (data.success) {
-        await Share.share({
-          message: `📝 ${transcript.title}\n\nView transcript: ${data.shareUrl}`,
-          title:   transcript.title,
-        });
+        await Share.share({ message: `📝 ${transcript.title}\n\nView transcript: ${data.shareUrl}`, title: transcript.title });
       } else {
         Alert.alert('Error', 'Could not generate share link');
       }
@@ -747,31 +1135,24 @@ export default function TranscriptScreen({ route }) {
   const generateFollowUpEmail = async () => {
     try {
       setGeneratingEmail(true);
-      const response = await fetch(
-        'https://transcript-app-lbpe.onrender.com/generate-email',
-        {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            transcript:  transcript.englishText || transcript.text,
-            summary:     summary || transcript.autoSummary,
-            actionItems: transcript.actionItems || [],
-            title:       transcript.title,
-            date:        formatDate(transcript.createdAt),
-          }),
-        }
-      );
+      const response = await fetch('https://transcript-app-lbpe.onrender.com/generate-email', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript:  transcript.englishText || transcript.text,
+          summary:     summary || transcript.autoSummary,
+          actionItems: transcript.actionItems || [],
+          title:       transcript.title,
+          date:        formatDate(transcript.createdAt),
+        }),
+      });
       const data = await response.json();
       if (data.success) {
-        const subject = encodeURIComponent(data.subject);
-        const body    = encodeURIComponent(data.body);
-        const mailUrl = `mailto:?subject=${subject}&body=${body}`;
+        const mailUrl = `mailto:?subject=${encodeURIComponent(data.subject)}&body=${encodeURIComponent(data.body)}`;
         const canOpen = await Linking.canOpenURL(mailUrl);
-        if (canOpen) {
-          await Linking.openURL(mailUrl);
-        } else {
+        if (canOpen) { await Linking.openURL(mailUrl); }
+        else {
           await Clipboard.setStringAsync(`Subject: ${data.subject}\n\n${data.body}`);
-          Alert.alert('✅ Email Copied!', 'Email content copied to clipboard. Paste it in your email app.');
+          Alert.alert('✅ Email Copied!', 'Email content copied to clipboard.');
         }
       } else {
         Alert.alert('Error', 'Could not generate email. Try again.');
@@ -786,41 +1167,36 @@ export default function TranscriptScreen({ route }) {
   const shareToWhatsApp = async () => {
     try {
       setSharingWhatsApp(true);
-
       const activeSummary = summary || transcript.autoSummary;
-      let message = `📝 *${transcript.title}*\n`;
-      message += `🗓️ ${formatDate(transcript.createdAt)}\n`;
-
+      let message = `📝 *${transcript.title}*\n🗓️ ${formatDate(transcript.createdAt)}\n`;
       if (activeSummary) {
-        // If structured JSON, extract just the summary line for WhatsApp
         const parsed = parseStructuredSummary(activeSummary);
-        message += `\n🤖 *Summary:*\n${parsed ? parsed.summary : activeSummary}\n`;
+        if (parsed && isNewFormat(parsed)) {
+          message += `\n🤖 *Purpose:*\n${parsed.executive_summary?.main_purpose || ''}\n`;
+          if (parsed.action_items?.length > 0) {
+            message += `\n🎯 *Action Items:*\n`;
+            parsed.action_items.forEach((a, i) => { message += `${i+1}. ${a.action} — ${a.owner}\n`; });
+          }
+        } else {
+          const summaryText = parsed ? parsed.summary : activeSummary;
+          if (summaryText) message += `\n🤖 *Summary:*\n${summaryText}\n`;
+          if (transcript.actionItems?.length > 0) {
+            message += `\n✅ *Action Items:*\n`;
+            transcript.actionItems.forEach((item, i) => {
+              message += `${i+1}. ${item.task}`;
+              if (item.owner)    message += ` — ${item.owner}`;
+              if (item.deadline) message += ` (${item.deadline})`;
+              message += '\n';
+            });
+          }
+        }
       }
-
-      if (transcript.actionItems?.length > 0) {
-        message += `\n✅ *Action Items:*\n`;
-        transcript.actionItems.forEach((item, i) => {
-          message += `${i + 1}. ${item.task}`;
-          if (item.owner)    message += ` — ${item.owner}`;
-          if (item.deadline) message += ` (${item.deadline})`;
-          message += '\n';
-        });
-      }
-
-      if (transcript.shareToken) {
-        message += `\n🔗 https://transcript-app-lbpe.onrender.com/share/${transcript.shareToken}\n`;
-      }
-
+      if (transcript.shareToken) message += `\n🔗 https://transcript-app-lbpe.onrender.com/share/${transcript.shareToken}\n`;
       message += `\n_Shared via VoxNote AI_`;
-
       const whatsappUrl = `whatsapp://send?text=${encodeURIComponent(message)}`;
       const canOpen = await Linking.canOpenURL(whatsappUrl);
-
-      if (canOpen) {
-        await Linking.openURL(whatsappUrl);
-      } else {
-        await Share.share({ message, title: transcript.title });
-      }
+      if (canOpen) { await Linking.openURL(whatsappUrl); }
+      else { await Share.share({ message, title: transcript.title }); }
     } catch (err) {
       Alert.alert('Error', err.message);
     } finally {
@@ -828,139 +1204,11 @@ export default function TranscriptScreen({ route }) {
     }
   };
 
-  const exportAsPDF = async () => {
-    try {
-      setExportingPDF(true);
-      const date     = formatDate(transcript.createdAt);
-      const duration = transcript.duration ? Math.round(transcript.duration / 60) + ' min' : 'N/A';
-      const words    = transcript.wordCount || 0;
-      const lang     = getLangBadge();
-
-      let actionItemsHTML = '';
-      if (transcript.actionItems?.length > 0) {
-        const rows = transcript.actionItems.map((item, i) => `
-          <tr>
-            <td style="padding:10px;border-bottom:1px solid #FFE0B2;font-weight:600;color:#E65100;">${i + 1}</td>
-            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#333;">${item.task}</td>
-            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.owner || '—'}</td>
-            <td style="padding:10px;border-bottom:1px solid #FFE0B2;color:#666;">${item.deadline || '—'}</td>
-          </tr>`).join('');
-        actionItemsHTML = `
-          <div class="section">
-            <div class="section-title" style="color:#E65100;border-left-color:#FF9800;">✅ Action Items</div>
-            <table style="width:100%;border-collapse:collapse;background:#FFF8F0;border-radius:8px;overflow:hidden;">
-              <thead><tr style="background:#FF9800;">
-                <th style="padding:10px;color:#fff;text-align:left;width:40px;">#</th>
-                <th style="padding:10px;color:#fff;text-align:left;">Task</th>
-                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Owner</th>
-                <th style="padding:10px;color:#fff;text-align:left;width:120px;">Deadline</th>
-              </tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </div>`;
-      }
-
-      const summaryContent = summary || transcript.autoSummary;
-      let summaryHTML = '';
-      if (summaryContent) {
-        summaryHTML = `
-          <div class="section">
-            <div class="section-title" style="color:#1A7A4A;border-left-color:#1A7A4A;">🤖 AI Summary</div>
-            <div style="background:#F0FAF4;padding:16px;border-radius:8px;font-size:14px;line-height:1.8;color:#333;white-space:pre-wrap;">${summaryContent}</div>
-          </div>`;
-      }
-
-      let transcriptHTML = '';
-      if (utterances.length > 0) {
-        const speakerColors = ['#1A56A0','#1A7A4A','#C85A00','#8B1AAF','#C0392B','#0097A7','#795548','#E91E63'];
-        const speakerBG     = ['#E8F0FC','#E8F5EE','#FEF3E8','#F3E8FE','#FDE8E8','#E0F7FA','#F3EDEB','#FCE4EC'];
-        const utterancesHTML = utterances.map((u) => {
-          const idx   = getSpeakerIndex(u.speaker);
-          const start = formatTime(u.start);
-          const end   = formatTime(u.end);
-          return `
-            <div style="background:${speakerBG[idx]};border-radius:10px;padding:14px;margin-bottom:12px;">
-              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-                <span style="background:${speakerColors[idx]};color:#fff;padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;">${u.speaker}</span>
-                <span style="font-size:11px;color:#888;">${start} — ${end}</span>
-              </div>
-              <div style="font-size:14px;color:#333;line-height:1.7;">${u.englishText || u.text}</div>
-              ${u.englishText && u.englishText !== u.text ? `<div style="font-size:12px;color:#888;margin-top:6px;font-style:italic;">${u.text}</div>` : ''}
-            </div>`;
-        }).join('');
-        transcriptHTML = `
-          <div class="section">
-            <div class="section-title">🎙 Speaker Transcript</div>
-            ${utterancesHTML}
-          </div>`;
-      } else {
-        transcriptHTML = `
-          <div class="section">
-            <div class="section-title">📝 Full Transcript</div>
-            <div style="font-size:14px;color:#333;line-height:1.8;white-space:pre-wrap;">${transcript.englishText || transcript.text}</div>
-          </div>`;
-      }
-
-      const html = `<!DOCTYPE html><html>
-        <head>
-          <meta charset="utf-8"/>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-          <style>
-            * { margin:0; padding:0; box-sizing:border-box; }
-            body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#fff; color:#333; }
-            .header { background:linear-gradient(135deg,#0D3B7A,#1A56A0); color:white; padding:32px 40px; }
-            .logo { font-size:13px; font-weight:700; letter-spacing:2px; color:#AACFEE; margin-bottom:12px; text-transform:uppercase; }
-            .title { font-size:24px; font-weight:800; margin-bottom:16px; line-height:1.3; }
-            .meta-grid { display:flex; gap:24px; flex-wrap:wrap; }
-            .meta-item { background:rgba(255,255,255,0.15); padding:8px 14px; border-radius:8px; font-size:12px; }
-            .meta-label { color:#AACFEE; font-size:10px; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px; }
-            .meta-value { color:#fff; font-weight:600; }
-            .body { padding:32px 40px; }
-            .section { margin-bottom:32px; }
-            .section-title { font-size:16px; font-weight:700; color:#0D3B7A; margin-bottom:16px; padding-left:12px; border-left:4px solid #1A56A0; }
-            .footer { margin-top:40px; padding:20px 40px; border-top:1px solid #EEE; text-align:center; font-size:11px; color:#AAA; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div class="logo">VoxNote — AI Transcription</div>
-            <div class="title">${transcript.title}</div>
-            <div class="meta-grid">
-              <div class="meta-item"><div class="meta-label">Date</div><div class="meta-value">${date}</div></div>
-              <div class="meta-item"><div class="meta-label">Duration</div><div class="meta-value">${duration}</div></div>
-              <div class="meta-item"><div class="meta-label">Words</div><div class="meta-value">${words}</div></div>
-              <div class="meta-item"><div class="meta-label">Language</div><div class="meta-value">${lang}</div></div>
-              <div class="meta-item"><div class="meta-label">Folder</div><div class="meta-value">${currentFolder}</div></div>
-            </div>
-          </div>
-          <div class="body">${summaryHTML}${actionItemsHTML}${transcriptHTML}</div>
-          <div class="footer">Generated by VoxNote AI Transcription App • ${new Date().toLocaleDateString('en-IN')}</div>
-        </body></html>`;
-
-      const { uri } = await Print.printToFileAsync({ html, base64: false });
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Share or Save PDF', UTI: 'com.adobe.pdf' });
-      } else {
-        Alert.alert('PDF Created', 'Saved to: ' + uri);
-      }
-    } catch (err) {
-      console.error('PDF export error:', err);
-      Alert.alert('Error', 'Could not generate PDF: ' + err.message);
-    } finally {
-      setExportingPDF(false);
-    }
-  };
-
-  // ─── Summary — pass mode so server uses right prompt ─────────────────────
   const getSummary = async () => {
     setLoadingSummary(true);
     setSummary(null);
     try {
-      const result = await summarizeTranscript(
-        transcript.englishText || transcript.text,
-        transcript.mode
-      );
+      const result = await summarizeTranscript(transcript.englishText || transcript.text, transcript.mode);
       if (result.success) setSummary(result.summary);
       else Alert.alert('Error', 'Could not generate summary.');
     } catch (err) { Alert.alert('Error', err.message); }
@@ -979,15 +1227,11 @@ export default function TranscriptScreen({ route }) {
     try {
       const result = await chatWithTranscripts(question, [transcript]);
       setChatMessages(prev => [...prev, {
-        role: 'ai',
-        text: result.success ? result.answer : 'Sorry, could not answer that.',
-        id:   (Date.now() + 1).toString(),
+        role: 'ai', text: result.success ? result.answer : 'Sorry, could not answer that.', id: (Date.now() + 1).toString(),
       }]);
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     } catch (err) {
-      setChatMessages(prev => [...prev, {
-        role: 'ai', text: 'Something went wrong.', id: (Date.now() + 1).toString()
-      }]);
+      setChatMessages(prev => [...prev, { role: 'ai', text: 'Something went wrong.', id: (Date.now() + 1).toString() }]);
     }
     setChatLoading(false);
   };
@@ -999,19 +1243,72 @@ export default function TranscriptScreen({ route }) {
   const formatTime = (ms) => {
     if (!ms) return '0:00';
     const s = Math.floor(ms / 1000);
-    return `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+    return `${Math.floor(s / 60).toString().padStart(2, '00')}:${(s % 60).toString().padStart(2, '0')}`;
   };
 
   const getLangBadge = () => {
     const lang = transcript.detectedLang || 'en';
-    const LANG_NAMES = {
-      en: 'English', hi: 'Hindi',     mr: 'Marathi',
-      te: 'Telugu',  ta: 'Tamil',     kn: 'Kannada',
-      ml: 'Malayalam', bn: 'Bengali', gu: 'Gujarati',
-      pa: 'Punjabi', ur: 'Urdu',
-    };
+    const LANG_NAMES = { en:'English', hi:'Hindi', mr:'Marathi', te:'Telugu', ta:'Tamil', kn:'Kannada', ml:'Malayalam', bn:'Bengali', gu:'Gujarati', pa:'Punjabi', ur:'Urdu' };
     return LANG_NAMES[lang] || 'Auto';
   };
+
+  // ─── Export choice modal ──────────────────────────────────────────────────
+  const renderExportModal = () => (
+    <Modal visible={showExportModal} transparent animationType="slide" onRequestClose={() => setShowExportModal(false)}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBox}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>📄 Export as PDF</Text>
+            <TouchableOpacity onPress={() => { setShowExportModal(false); setExportChoice(null); }}>
+              <Text style={styles.modalCloseX}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.modalSubtitle}>What would you like to include?</Text>
+
+          {[
+            { type: 'summary',    icon: '🤖', label: 'AI Summary only',         desc: 'All 11 sections of structured AI notes' },
+            { type: 'transcript', icon: '🎙', label: 'Transcript only',          desc: 'Full speaker-by-speaker conversation' },
+            { type: 'both',       icon: '📋', label: 'Both (complete document)', desc: 'AI Summary + full transcript' },
+          ].map(opt => (
+            <TouchableOpacity
+              key={opt.type}
+              style={[styles.exportOption, exportChoice === opt.type && styles.exportOptionSelected]}
+              onPress={() => setExportChoice(opt.type)}>
+              <Text style={styles.exportOptionIcon}>{opt.icon}</Text>
+              <View style={styles.exportOptionBody}>
+                <Text style={[styles.exportOptionLabel, exportChoice === opt.type && styles.exportOptionLabelSelected]}>
+                  {opt.label}
+                </Text>
+                <Text style={styles.exportOptionDesc}>{opt.desc}</Text>
+              </View>
+              {exportChoice === opt.type && <Text style={styles.exportOptionCheck}>✓</Text>}
+            </TouchableOpacity>
+          ))}
+
+          <View style={styles.exportModalButtons}>
+            <TouchableOpacity
+              style={styles.modalCancelBtn}
+              onPress={() => { setShowExportModal(false); setExportChoice(null); }}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.exportConfirmBtn, !exportChoice && { opacity: 0.4 }]}
+              disabled={!exportChoice || exportingPDF}
+              onPress={() => {
+                const choice = exportChoice;
+                setShowExportModal(false);
+                setExportChoice(null);
+                exportAsPDF(choice);
+              }}>
+              {exportingPDF
+                ? <ActivityIndicator size="small" color="#FFF" />
+                : <Text style={styles.exportConfirmText}>Generate PDF →</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 
   const renderFolderModal = () => (
     <Modal visible={folderModal} transparent animationType="slide" onRequestClose={() => setFolderModal(false)}>
@@ -1019,19 +1316,11 @@ export default function TranscriptScreen({ route }) {
         <View style={styles.modalBox}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>📁 Move to Folder</Text>
-            <TouchableOpacity onPress={() => setFolderModal(false)}>
-              <Text style={styles.modalCloseX}>✕</Text>
-            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setFolderModal(false)}><Text style={styles.modalCloseX}>✕</Text></TouchableOpacity>
           </View>
-          <Text style={styles.modalSubtitle}>
-            Currently in: <Text style={{ fontWeight: 'bold' }}>{FOLDER_ICONS[currentFolder]} {currentFolder}</Text>
-          </Text>
+          <Text style={styles.modalSubtitle}>Currently in: <Text style={{ fontWeight: 'bold' }}>{FOLDER_ICONS[currentFolder]} {currentFolder}</Text></Text>
           {FOLDERS.map(folder => (
-            <TouchableOpacity
-              key={folder}
-              style={[styles.folderOption, currentFolder === folder && styles.folderOptionActive]}
-              onPress={() => saveFolder(folder)}
-              disabled={savingFolder}>
+            <TouchableOpacity key={folder} style={[styles.folderOption, currentFolder === folder && styles.folderOptionActive]} onPress={() => saveFolder(folder)} disabled={savingFolder}>
               <Text style={styles.folderOptionIcon}>{FOLDER_ICONS[folder]}</Text>
               <Text style={[styles.folderOptionText, currentFolder === folder && styles.folderOptionTextActive]}>{folder}</Text>
               {currentFolder === folder && <Text style={styles.folderOptionCheck}>✓</Text>}
@@ -1048,9 +1337,7 @@ export default function TranscriptScreen({ route }) {
         <View style={styles.modalBox}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>✏️ Rename Speaker</Text>
-            <TouchableOpacity onPress={() => setRenamingModal(false)}>
-              <Text style={styles.modalCloseX}>✕</Text>
-            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setRenamingModal(false)}><Text style={styles.modalCloseX}>✕</Text></TouchableOpacity>
           </View>
           <View style={styles.modalCurrentRow}>
             <Text style={styles.modalCurrentLabel}>Current name:</Text>
@@ -1100,9 +1387,7 @@ export default function TranscriptScreen({ route }) {
         <View style={styles.suggestionsContainer}>
           <Text style={styles.suggestionsTitle}>Try asking:</Text>
           <View style={styles.suggestionsGrid}>
-            {['What were the main topics?', 'What action items were mentioned?',
-              'Who said what about the project?', 'What decisions were made?'
-            ].map((q, i) => (
+            {['What were the main topics?', 'What action items were mentioned?', 'Who said what about the project?', 'What decisions were made?'].map((q, i) => (
               <TouchableOpacity key={i} style={styles.suggestionChip} onPress={() => { setChatInput(q); setTimeout(() => inputRef.current?.focus(), 100); }}>
                 <Text style={styles.suggestionText}>{q}</Text>
               </TouchableOpacity>
@@ -1120,9 +1405,7 @@ export default function TranscriptScreen({ route }) {
         renderItem={({ item }) => (
           <View style={[styles.chatBubble, item.role === 'user' ? styles.userBubble : styles.aiBubble]}>
             {item.role === 'ai' && <Text style={styles.aiLabel}>🤖 VoxNote AI</Text>}
-            <Text selectable={true} style={[styles.chatBubbleText, item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>
-              {item.text}
-            </Text>
+            <Text selectable={true} style={[styles.chatBubbleText, item.role === 'user' ? styles.userBubbleText : styles.aiBubbleText]}>{item.text}</Text>
           </View>
         )}
         ListFooterComponent={chatLoading ? (
@@ -1141,8 +1424,7 @@ export default function TranscriptScreen({ route }) {
             placeholderTextColor="#888"
             value={chatInput}
             onChangeText={setChatInput}
-            multiline
-            maxLength={500}
+            multiline maxLength={500}
             returnKeyType="send"
             blurOnSubmit={false}
             onSubmitEditing={sendChatMessage}
@@ -1164,6 +1446,7 @@ export default function TranscriptScreen({ route }) {
     <SafeAreaView style={styles.container}>
       {renderRenameModal()}
       {renderFolderModal()}
+      {renderExportModal()}
       {showChat && renderChatPanel()}
 
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -1175,25 +1458,16 @@ export default function TranscriptScreen({ route }) {
               style={styles.titleInput}
               value={currentTitle}
               onChangeText={setCurrentTitle}
-              autoFocus
-              maxLength={100}
+              autoFocus maxLength={100}
               returnKeyType="done"
               onSubmitEditing={saveTitle}
               placeholder="Enter recording title..."
               placeholderTextColor="#AAA"
             />
-            <TouchableOpacity
-              style={[styles.titleSaveBtn, savingTitle && { opacity: 0.6 }]}
-              onPress={saveTitle}
-              disabled={savingTitle}>
-              {savingTitle
-                ? <ActivityIndicator size="small" color="#FFF" />
-                : <Text style={styles.titleSaveBtnText}>✓</Text>
-              }
+            <TouchableOpacity style={[styles.titleSaveBtn, savingTitle && { opacity: 0.6 }]} onPress={saveTitle} disabled={savingTitle}>
+              {savingTitle ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={styles.titleSaveBtnText}>✓</Text>}
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.titleCancelBtn}
-              onPress={() => { setEditingTitle(false); setCurrentTitle(transcript.title); }}>
+            <TouchableOpacity style={styles.titleCancelBtn} onPress={() => { setEditingTitle(false); setCurrentTitle(transcript.title); }}>
               <Text style={styles.titleCancelBtnText}>✕</Text>
             </TouchableOpacity>
           </View>
@@ -1205,6 +1479,7 @@ export default function TranscriptScreen({ route }) {
             </View>
           </TouchableOpacity>
         )}
+
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{transcript.wordCount} words  •  {formatDate(transcript.createdAt)}</Text>
           <View style={styles.langBadge}>
@@ -1212,7 +1487,6 @@ export default function TranscriptScreen({ route }) {
           </View>
         </View>
 
-        {/* Template badge */}
         {templateInfo && (
           <View style={[styles.templateBadge, { backgroundColor: templateInfo.bg, borderColor: templateInfo.color }]}>
             <Text style={styles.templateBadgeIcon}>{templateInfo.icon}</Text>
@@ -1250,7 +1524,11 @@ export default function TranscriptScreen({ route }) {
           <Text style={styles.chatBtnArrow}>›</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]} onPress={exportAsPDF} disabled={exportingPDF}>
+        {/* ── PDF Export button — now opens modal ── */}
+        <TouchableOpacity
+          style={[styles.pdfBtn, exportingPDF && { opacity: 0.6 }]}
+          onPress={() => setShowExportModal(true)}
+          disabled={exportingPDF}>
           {exportingPDF ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.pdfBtnIcon}>📄</Text>}
           <Text style={styles.pdfBtnText}>{exportingPDF ? 'Generating PDF...' : 'Export as PDF'}</Text>
         </TouchableOpacity>
@@ -1284,13 +1562,8 @@ export default function TranscriptScreen({ route }) {
           style={[styles.minutesBtn, exportingMinutes && { opacity: 0.6 }]}
           onPress={exportMinutesPDF}
           disabled={exportingMinutes}>
-          {exportingMinutes
-            ? <ActivityIndicator size="small" color="#FFFFFF" />
-            : <Text style={styles.minutesBtnIcon}>📋</Text>
-          }
-          <Text style={styles.minutesBtnText}>
-            {exportingMinutes ? 'Generating...' : 'Export Meeting Minutes PDF'}
-          </Text>
+          {exportingMinutes ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.minutesBtnIcon}>📋</Text>}
+          <Text style={styles.minutesBtnText}>{exportingMinutes ? 'Generating...' : 'Export Meeting Minutes PDF'}</Text>
         </TouchableOpacity>
 
         {loadingSummary && (
@@ -1300,20 +1573,24 @@ export default function TranscriptScreen({ route }) {
           </View>
         )}
 
-        {/* ─── AI Summary — structured or plain text ─────────────────── */}
+        {/* ─── AI Summary — auto-detects new vs old format ─────────────────── */}
         {summary && (
           <View style={styles.summaryBox}>
             <View style={styles.summaryHeader}>
-              <Text style={styles.summaryTitle}>🤖 AI {templateInfo ? templateInfo.label : 'Summary'}</Text>
+              <Text style={styles.summaryTitle}>
+                🤖 AI {templateInfo ? templateInfo.label : 'Summary'}
+                {summaryIsNew ? '  ·  11 sections' : ''}
+              </Text>
             </View>
-            {isStructuredSummary ? (
-              <StructuredSummary summary={summary} mode={transcript.mode} />
+            {summaryIsNew ? (
+              <StructuredSummaryV2 data={parsedSummary} />
+            ) : summaryIsLegacy ? (
+              <StructuredSummaryLegacy summary={summary} mode={transcript.mode} />
             ) : (
               <Text selectable={true} style={styles.summaryText}>{summary}</Text>
             )}
           </View>
         )}
-        {/* ─────────────────────────────────────────────────────────────── */}
 
         {transcript.actionItems?.length > 0 && (
           <View style={styles.actionItemsBox}>
@@ -1327,16 +1604,8 @@ export default function TranscriptScreen({ route }) {
                   <Text selectable={true} style={styles.actionItemTask}>{item.task}</Text>
                 </View>
                 <View style={styles.actionItemMeta}>
-                  {item.owner && (
-                    <View style={styles.actionItemBadge}>
-                      <Text style={styles.actionItemBadgeText}>👤 {item.owner}</Text>
-                    </View>
-                  )}
-                  {item.deadline && (
-                    <View style={[styles.actionItemBadge, styles.deadlineBadge]}>
-                      <Text style={styles.actionItemBadgeText}>📅 {item.deadline}</Text>
-                    </View>
-                  )}
+                  {item.owner && <View style={styles.actionItemBadge}><Text style={styles.actionItemBadgeText}>👤 {item.owner}</Text></View>}
+                  {item.deadline && <View style={[styles.actionItemBadge, styles.deadlineBadge]}><Text style={styles.actionItemBadgeText}>📅 {item.deadline}</Text></View>}
                 </View>
               </View>
             ))}
@@ -1369,10 +1638,7 @@ export default function TranscriptScreen({ route }) {
             </View>
             <View style={styles.legendRow}>
               {[...new Set(utterances.map(u => u.speaker))].map(speaker => (
-                <TouchableOpacity
-                  key={speaker}
-                  style={[styles.legendBadge, { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(speaker)] }]}
-                  onPress={() => handleSpeakerTap(speaker)} activeOpacity={0.7}>
+                <TouchableOpacity key={speaker} style={[styles.legendBadge, { backgroundColor: SPEAKER_COLORS[getSpeakerIndex(speaker)] }]} onPress={() => handleSpeakerTap(speaker)} activeOpacity={0.7}>
                   <Text style={styles.legendText}>{speaker}  ✏️</Text>
                 </TouchableOpacity>
               ))}
@@ -1382,9 +1648,7 @@ export default function TranscriptScreen({ route }) {
               return (
                 <View key={index} style={[styles.utteranceBox, { backgroundColor: SPEAKER_BG[idx] }]}>
                   <View style={styles.speakerRow}>
-                    <TouchableOpacity
-                      style={[styles.speakerBadge, { backgroundColor: SPEAKER_COLORS[idx] }]}
-                      onPress={() => handleSpeakerTap(utterance.speaker)} activeOpacity={0.7}>
+                    <TouchableOpacity style={[styles.speakerBadge, { backgroundColor: SPEAKER_COLORS[idx] }]} onPress={() => handleSpeakerTap(utterance.speaker)} activeOpacity={0.7}>
                       <Text style={styles.speakerBadgeText}>{utterance.speaker}  ✏️</Text>
                     </TouchableOpacity>
                     <Text style={styles.utteranceTime}>{formatTime(utterance.start)} — {formatTime(utterance.end)}</Text>
@@ -1426,21 +1690,16 @@ const styles = StyleSheet.create({
   container:    { flex: 1, backgroundColor: '#F5F7FA' },
   scroll:       { padding: 20, paddingBottom: 40 },
   title:        { fontSize: 20, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 6 },
-  metaRow:      { flexDirection: 'row', justifyContent: 'space-between',
-                  alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 },
+  metaRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 },
   meta:         { fontSize: 12, color: '#888' },
   langBadge:    { backgroundColor: '#E8F0FC', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   langBadgeText:{ fontSize: 11, color: '#1A56A0', fontWeight: '600' },
 
-  templateBadge:      { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5,
-                        borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7,
-                        marginBottom: 10, gap: 6, alignSelf: 'flex-start' },
+  templateBadge:      { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7, marginBottom: 10, gap: 6, alignSelf: 'flex-start' },
   templateBadgeIcon:  { fontSize: 14 },
   templateBadgeLabel: { fontSize: 12, fontWeight: '700' },
 
-  folderBadge:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF',
-                       borderWidth: 1, borderColor: '#D0DAF8', borderRadius: 10,
-                       paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 6 },
+  folderBadge:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF', borderWidth: 1, borderColor: '#D0DAF8', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 6 },
   folderBadgeIcon:   { fontSize: 16 },
   folderBadgeText:   { fontSize: 13, color: '#1A56A0', fontWeight: '600', flex: 1 },
   folderBadgeChange: { fontSize: 12, color: '#888' },
@@ -1452,56 +1711,46 @@ const styles = StyleSheet.create({
   btnIcon:      { fontSize: 18, marginBottom: 2 },
   btnText:      { color: '#fff', fontWeight: 'bold', fontSize: 12 },
 
-  chatBtn:           { flexDirection: 'row', alignItems: 'center', backgroundColor: '#6C3FA0',
-                       padding: 14, borderRadius: 12, marginBottom: 10, gap: 12 },
+  chatBtn:           { flexDirection: 'row', alignItems: 'center', backgroundColor: '#6C3FA0', padding: 14, borderRadius: 12, marginBottom: 10, gap: 12 },
   chatBtnIcon:       { fontSize: 24 },
   chatBtnTextWrapper:{ flex: 1 },
   chatBtnTitle:      { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
   chatBtnSubtitle:   { color: '#DDD0FF', fontSize: 11, marginTop: 2 },
   chatBtnArrow:      { color: '#FFFFFF', fontSize: 24, fontWeight: 'bold' },
 
-  pdfBtn:        { flexDirection: 'row', alignItems: 'center', backgroundColor: '#C0392B',
-                   padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  pdfBtn:        { flexDirection: 'row', alignItems: 'center', backgroundColor: '#C0392B', padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
   pdfBtnIcon:    { fontSize: 20 },
   pdfBtnText:    { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
-  shareLinkBtn:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0097A7',
-                   padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  shareLinkBtn:  { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0097A7', padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
   shareLinkIcon: { fontSize: 20 },
   shareLinkText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
-  emailBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2E7D32',
-                  padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  emailBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2E7D32', padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
   emailBtnIcon: { fontSize: 20 },
   emailBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
-  whatsAppBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#25D366',
-                     padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
+  whatsAppBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#25D366', padding: 14, borderRadius: 12, marginBottom: 10, gap: 10 },
   whatsAppBtnIcon: { fontSize: 20 },
   whatsAppBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flex: 1 },
 
-  exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A',
-                  padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
+  exportBtn:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4A4A8A', padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
   exportBtnIcon:{ fontSize: 18 },
   exportBtnText:{ color: '#FFFFFF', fontWeight: '600', fontSize: 13, flex: 1 },
 
-  loadingBox:   { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16,
-                  backgroundColor: '#EFF4FF', borderRadius: 10, marginBottom: 16 },
+  loadingBox:   { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 16, backgroundColor: '#EFF4FF', borderRadius: 10, marginBottom: 16 },
   loadingText:  { color: '#1A56A0', fontSize: 13 },
 
-  summaryBox:    { backgroundColor: '#D6F0E2', padding: 16, borderRadius: 12,
-                   marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
+  summaryBox:    { backgroundColor: '#D6F0E2', padding: 16, borderRadius: 12, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#1A7A4A' },
   summaryHeader: { marginBottom: 12 },
   summaryTitle:  { fontSize: 14, fontWeight: 'bold', color: '#1A7A4A' },
   summaryText:   { fontSize: 13, color: '#333', lineHeight: 22 },
 
-  actionItemsBox:      { backgroundColor: '#FFF3E0', padding: 16, borderRadius: 12,
-                         marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#FF9800' },
+  actionItemsBox:      { backgroundColor: '#FFF3E0', padding: 16, borderRadius: 12, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#FF9800' },
   actionItemsTitle:    { fontSize: 14, fontWeight: 'bold', color: '#E65100', marginBottom: 12 },
   actionItem:          { backgroundColor: '#FFFFFF', borderRadius: 8, padding: 12, marginBottom: 8 },
   actionItemHeader:    { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 6 },
-  actionItemNumber:    { width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF9800',
-                         justifyContent: 'center', alignItems: 'center' },
+  actionItemNumber:    { width: 24, height: 24, borderRadius: 12, backgroundColor: '#FF9800', justifyContent: 'center', alignItems: 'center' },
   actionItemNumberText:{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 },
   actionItemTask:      { flex: 1, fontSize: 14, color: '#333', fontWeight: '500', lineHeight: 20 },
   actionItemMeta:      { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
@@ -1509,8 +1758,7 @@ const styles = StyleSheet.create({
   deadlineBadge:       { backgroundColor: '#FCE4EC' },
   actionItemBadgeText: { fontSize: 11, color: '#E65100', fontWeight: '600' },
 
-  translationBox:   { backgroundColor: '#FFF9E6', padding: 16, borderRadius: 12,
-                      marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#E6A817' },
+  translationBox:   { backgroundColor: '#FFF9E6', padding: 16, borderRadius: 12, marginBottom: 16, borderLeftWidth: 4, borderLeftColor: '#E6A817' },
   translationHeader:{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   translationTitle: { fontSize: 14, fontWeight: 'bold', color: '#8B6A00' },
   translationText:  { fontSize: 14, color: '#333', lineHeight: 24 },
@@ -1523,8 +1771,7 @@ const styles = StyleSheet.create({
   transcriptBox:    { backgroundColor: '#fff', padding: 16, borderRadius: 12, marginBottom: 16 },
   transcriptLabel:  { fontSize: 14, fontWeight: 'bold', color: '#0D3B7A', marginBottom: 8 },
   transcriptText:   { fontSize: 15, color: '#333', lineHeight: 28 },
-  renameHintBox:    { backgroundColor: '#FFF3CD', padding: 8, borderRadius: 8,
-                      marginBottom: 12, alignItems: 'center' },
+  renameHintBox:    { backgroundColor: '#FFF3CD', padding: 8, borderRadius: 8, marginBottom: 12, alignItems: 'center' },
   renameHintText:   { fontSize: 12, color: '#856404', fontWeight: '500' },
   legendRow:        { flexDirection: 'row', gap: 8, marginBottom: 16, flexWrap: 'wrap' },
   legendBadge:      { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20 },
@@ -1537,16 +1784,14 @@ const styles = StyleSheet.create({
   utteranceText:    { fontSize: 15, color: '#333', lineHeight: 26 },
   utteranceOriginal:{ fontSize: 12, color: '#888', lineHeight: 20, marginTop: 6, fontStyle: 'italic' },
 
+  // ── Modals ────────────────────────────────────────────────────────────────
   modalOverlay:     { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalBox:         { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20,
-                      borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
-  modalHeader:      { flexDirection: 'row', justifyContent: 'space-between',
-                      alignItems: 'center', marginBottom: 16 },
+  modalBox:         { backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 },
+  modalHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   modalTitle:       { fontSize: 18, fontWeight: 'bold', color: '#0D3B7A' },
   modalCloseX:      { fontSize: 22, color: '#888', padding: 4 },
   modalSubtitle:    { fontSize: 13, color: '#666', marginBottom: 16 },
-  folderOption:     { flexDirection: 'row', alignItems: 'center', padding: 14,
-                      borderRadius: 12, marginBottom: 8, backgroundColor: '#F5F7FA', gap: 12 },
+  folderOption:     { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 12, marginBottom: 8, backgroundColor: '#F5F7FA', gap: 12 },
   folderOptionActive:{ backgroundColor: '#E8F0FC', borderWidth: 2, borderColor: '#1A56A0' },
   folderOptionIcon: { fontSize: 20 },
   folderOptionText: { flex: 1, fontSize: 15, color: '#333', fontWeight: '500' },
@@ -1557,32 +1802,37 @@ const styles = StyleSheet.create({
   modalCurrentBadge:{ paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 },
   modalCurrentBadgeText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 13 },
   modalInputLabel:  { fontSize: 13, color: '#333', fontWeight: '600', marginBottom: 8 },
-  modalInput:       { backgroundColor: '#F5F7FA', borderWidth: 2, borderColor: '#1A56A0',
-                      borderRadius: 12, padding: 14, fontSize: 18, color: '#333',
-                      marginBottom: 10, fontWeight: '500' },
+  modalInput:       { backgroundColor: '#F5F7FA', borderWidth: 2, borderColor: '#1A56A0', borderRadius: 12, padding: 14, fontSize: 18, color: '#333', marginBottom: 10, fontWeight: '500' },
   modalHint:        { fontSize: 11, color: '#888', marginBottom: 20, fontStyle: 'italic' },
   modalButtons:     { flexDirection: 'row', gap: 12 },
-  modalCancelBtn:   { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1.5,
-                      borderColor: '#DDD', alignItems: 'center' },
+  modalCancelBtn:   { flex: 1, padding: 14, borderRadius: 12, borderWidth: 1.5, borderColor: '#DDD', alignItems: 'center' },
   modalCancelText:  { fontSize: 15, color: '#666', fontWeight: '600' },
-  modalSaveBtn:     { flex: 2, padding: 14, borderRadius: 12,
-                      backgroundColor: '#1A56A0', alignItems: 'center' },
+  modalSaveBtn:     { flex: 2, padding: 14, borderRadius: 12, backgroundColor: '#1A56A0', alignItems: 'center' },
   modalSaveText:    { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
 
-  chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-                      backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
-  chatHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                      backgroundColor: '#6C3FA0', paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16 },
+  // ── Export modal specific ────────────────────────────────────────────────
+  exportOption:        { flexDirection: 'row', alignItems: 'center', padding: 14, borderRadius: 12, marginBottom: 8, backgroundColor: '#F5F7FA', borderWidth: 1.5, borderColor: 'transparent', gap: 12 },
+  exportOptionSelected:{ backgroundColor: '#E8F0FC', borderColor: '#1A56A0' },
+  exportOptionIcon:    { fontSize: 22 },
+  exportOptionBody:    { flex: 1 },
+  exportOptionLabel:   { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 2 },
+  exportOptionLabelSelected: { color: '#1A56A0' },
+  exportOptionDesc:    { fontSize: 12, color: '#888' },
+  exportOptionCheck:   { fontSize: 18, color: '#1A56A0', fontWeight: 'bold' },
+  exportModalButtons:  { flexDirection: 'row', gap: 12, marginTop: 8 },
+  exportConfirmBtn:    { flex: 2, padding: 14, borderRadius: 12, backgroundColor: '#C0392B', alignItems: 'center' },
+  exportConfirmText:   { fontSize: 15, color: '#FFFFFF', fontWeight: 'bold' },
+
+  // ── Chat ────────────────────────────────────────────────────────────────
+  chatOverlay:      { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF', zIndex: 999, elevation: 20 },
+  chatHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#6C3FA0', paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16 },
   chatBackBtn:      { paddingVertical: 6, paddingRight: 12 },
   chatBackText:     { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   chatHeaderTitle:  { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold' },
-  chatContext:      { backgroundColor: '#F0E8FF', paddingHorizontal: 16, paddingVertical: 8,
-                      borderBottomWidth: 1, borderBottomColor: '#E0D0FF' },
+  chatContext:      { backgroundColor: '#F0E8FF', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#E0D0FF' },
   chatContextText:  { fontSize: 12, color: '#6C3FA0', fontWeight: '600' },
-  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF',
-                          borderBottomWidth: 1, borderBottomColor: '#EEE' },
-  suggestionsTitle: { fontSize: 12, color: '#888', marginBottom: 10, fontWeight: '600',
-                      textTransform: 'uppercase', letterSpacing: 0.5 },
+  suggestionsContainer: { padding: 16, backgroundColor: '#FAF7FF', borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  suggestionsTitle: { fontSize: 12, color: '#888', marginBottom: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
   suggestionsGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   suggestionChip:   { backgroundColor: '#EDE0FF', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20 },
   suggestionText:   { fontSize: 12, color: '#6C3FA0', fontWeight: '500' },
@@ -1590,8 +1840,7 @@ const styles = StyleSheet.create({
   chatMessagesContent: { padding: 16, paddingBottom: 8 },
   chatBubble:       { maxWidth: '85%', padding: 12, borderRadius: 16, marginBottom: 12 },
   userBubble:       { backgroundColor: '#6C3FA0', alignSelf: 'flex-end', borderBottomRightRadius: 4 },
-  aiBubble:         { backgroundColor: '#FFFFFF', alignSelf: 'flex-start', borderBottomLeftRadius: 4,
-                      elevation: 2, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4 },
+  aiBubble:         { backgroundColor: '#FFFFFF', alignSelf: 'flex-start', borderBottomLeftRadius: 4, elevation: 2, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4 },
   aiLabel:          { fontSize: 10, color: '#6C3FA0', fontWeight: '700', marginBottom: 4 },
   chatBubbleText:   { fontSize: 14, lineHeight: 22 },
   userBubbleText:   { color: '#FFFFFF' },
@@ -1599,38 +1848,28 @@ const styles = StyleSheet.create({
   typingIndicator:  { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
   typingText:       { fontSize: 13, color: '#888', fontStyle: 'italic' },
   chatInputWrapper: { backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#EEE' },
-  chatInputRow:     { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10,
-                      paddingBottom: 8, gap: 8, alignItems: 'flex-end' },
-  chatInput:        { flex: 1, backgroundColor: '#F5F0FF', borderRadius: 20,
-                      paddingHorizontal: 16, paddingVertical: 10,
-                      fontSize: 14, color: '#333', maxHeight: 100, minHeight: 44 },
-  sendBtn:          { width: 44, height: 44, borderRadius: 22, backgroundColor: '#6C3FA0',
-                      justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
+  chatInputRow:     { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8, gap: 8, alignItems: 'flex-end' },
+  chatInput:        { flex: 1, backgroundColor: '#F5F0FF', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, fontSize: 14, color: '#333', maxHeight: 100, minHeight: 44 },
+  sendBtn:          { width: 44, height: 44, borderRadius: 22, backgroundColor: '#6C3FA0', justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
   sendBtnDisabled:  { backgroundColor: '#CCC' },
   sendBtnText:      { color: '#FFFFFF', fontSize: 18 },
   navBarSpacer:     { height: 20, backgroundColor: '#FFFFFF' },
 
-  // ── Editable title styles ──
+  // ── Title editing ────────────────────────────────────────────────────────
   titleRow:         { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   titleEditIcon:    { fontSize: 14, color: '#888', marginTop: 2 },
   titleEditRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  titleInput:       { flex: 1, fontSize: 18, fontWeight: 'bold', color: '#0D3B7A',
-                      borderBottomWidth: 2, borderBottomColor: '#1A56A0',
-                      paddingVertical: 4, paddingHorizontal: 2 },
-  titleSaveBtn:     { backgroundColor: '#1A7A4A', width: 36, height: 36,
-                      borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  titleInput:       { flex: 1, fontSize: 18, fontWeight: 'bold', color: '#0D3B7A', borderBottomWidth: 2, borderBottomColor: '#1A56A0', paddingVertical: 4, paddingHorizontal: 2 },
+  titleSaveBtn:     { backgroundColor: '#1A7A4A', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   titleSaveBtnText: { color: '#FFFFFF', fontSize: 18, fontWeight: 'bold' },
-  titleCancelBtn:   { backgroundColor: '#EEE', width: 36, height: 36,
-                      borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  titleCancelBtn:   { backgroundColor: '#EEE', width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   titleCancelBtnText: { color: '#666', fontSize: 16, fontWeight: 'bold' },
 
-  // ── Copy AI Notes + Minutes PDF buttons ──
-  copyNotesBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1A7A4A',
-                      padding: 12, borderRadius: 10, marginBottom: 10, gap: 8 },
+  // ── Bottom action buttons ────────────────────────────────────────────────
+  copyNotesBtn:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1A7A4A', padding: 12, borderRadius: 10, marginBottom: 10, gap: 8 },
   copyNotesBtnIcon: { fontSize: 18 },
   copyNotesBtnText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13, flex: 1 },
-  minutesBtn:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0D3B7A',
-                      padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
+  minutesBtn:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0D3B7A', padding: 12, borderRadius: 10, marginBottom: 16, gap: 8 },
   minutesBtnIcon:   { fontSize: 18 },
   minutesBtnText:   { color: '#FFFFFF', fontWeight: '600', fontSize: 13, flex: 1 },
 });
