@@ -49,18 +49,42 @@ const extractBullets = (autoSummary) => {
     const clean = autoSummary.replace(/^```json\s*/i,'').replace(/\s*```$/i,'').trim();
     const parsed = JSON.parse(clean);
     const lines = [];
+
+    // ── NEW 11-section format (has executive_summary) ──────────────────────
+    if (parsed.executive_summary) {
+      if (parsed.executive_summary.main_purpose)
+        lines.push(parsed.executive_summary.main_purpose);
+      if (Array.isArray(parsed.executive_summary.major_conclusions))
+        parsed.executive_summary.major_conclusions.slice(0,2).forEach(c => {
+          if (typeof c === 'string') lines.push(c);
+        });
+      if (Array.isArray(parsed.key_points))
+        parsed.key_points.slice(0,2).forEach(k => {
+          // key_points are objects {number, key_point, supporting_context}
+          if (typeof k === 'string') lines.push(k);
+          else if (k && typeof k.key_point === 'string') lines.push(k.key_point);
+        });
+      return lines.slice(0,4);
+    }
+
+    // ── OLD format (meeting/sales/doctor etc.) ─────────────────────────────
     if (parsed.summary) lines.push(parsed.summary);
     const extras = parsed.key_decisions || parsed.key_points || parsed.key_concepts || parsed.requirements || [];
-    extras.slice(0,3).forEach(e => lines.push(e));
+    extras.slice(0,3).forEach(e => {
+      if (typeof e === 'string') lines.push(e);
+      else if (e && typeof e.key_point === 'string') lines.push(e.key_point);
+      else if (e && typeof e.task === 'string') lines.push(e.task);
+    });
     return lines.slice(0,4);
+
   } catch {}
+
   return autoSummary.split('\n')
     .filter(l => l.trim().match(/^[\d\-\*\•]/))
     .map(l => l.replace(/^[\d\.\-\*\•]\s*/,'').trim())
     .filter(l => l.length > 10)
     .slice(0,4);
 };
-
 const formatDuration = (seconds) => {
   if (!seconds) return null;
   const mins = Math.round(seconds / 60);
