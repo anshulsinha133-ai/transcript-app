@@ -6,7 +6,7 @@ const fs         = require('fs');
 const crypto     = require('crypto');
 const OpenAI     = require('openai');
 const { AssemblyAI } = require('assemblyai');
-const { SarvamAIClient } = require('sarvamai');        // ← NEW: Sarvam SDK
+const { SarvamAIClient } = require('sarvamai');      // ← Sarvam SDK
 const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
@@ -64,10 +64,19 @@ Analyze it STRICTLY based only on the transcript content.
 - If something is unclear, state: "Not clearly stated in transcript."
 - Preserve original meaning exactly.
 - Do NOT inject external knowledge or recommendations unless explicitly requested.
-- Be concise, structured, and comprehensive.
+- Be concise. Do NOT repeat the same information in multiple sections.
+- Each section must contain ONLY new information not already covered in another section.
 - Separate explicit facts from possible inference.
 - If speakers are unclear, label them as: Speaker 1, Speaker 2, etc.
 - The transcript may contain Roman-script Hindi, Marathi, or English. Always respond in clear English only.
+
+## SKIP EMPTY SECTIONS — CRITICAL
+- If a section has NO relevant data from the transcript, return an EMPTY ARRAY [] for that field.
+- Do NOT add placeholder text like "None identified" or "Not mentioned" inside arrays.
+- Only include items that are EXPLICITLY present in the transcript.
+- Example: if no decisions were made, return "decisions_taken": []
+- Example: if no risks were raised, return "risks_concerns": []
+- Example: if no quotes are worth retaining, return "quotes_worth_retaining": []
 
 ## Required Output
 Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
@@ -75,58 +84,54 @@ Return ONLY a valid JSON object — no markdown, no explanation, no backticks.
 {
   "executive_summary": {
     "main_purpose": "One sentence describing the core purpose of this recording",
-    "core_themes": ["Theme 1", "Theme 2", "Theme 3"],
+    "core_themes": ["Theme 1", "Theme 2"],
     "major_conclusions": ["Conclusion 1", "Conclusion 2"],
     "key_outcomes": ["Outcome 1", "Outcome 2"]
   },
   "detailed_summary": [
     {
       "topic": "Topic heading",
-      "what_was_said": "What was discussed under this topic — 2-4 sentences",
+      "what_was_said": "What was discussed — 2-3 sentences. Do not repeat what is already in executive_summary.",
       "speaker": "Speaker name or Not clearly stated in transcript"
     }
   ],
   "key_points": [
-    { "number": 1, "key_point": "The key point or insight", "supporting_context": "What was said to support this" }
+    { "number": 1, "key_point": "A unique insight not already listed in detailed_summary", "supporting_context": "Brief supporting context" }
   ],
   "decisions_taken": [
-    { "decision": "Exact decision made", "owner": "Not specified", "context": "Context in which decision was made" }
+    { "decision": "Exact decision made", "owner": "Not specified", "context": "Context" }
   ],
   "action_items": [
     { "action": "Task starting with a verb", "owner": "Not specified", "deadline": "Not specified", "dependency": "Not specified" }
   ],
   "open_questions": [
-    { "question": "Unanswered question or pending matter", "status": "Unresolved" }
+    { "question": "Unanswered question or pending matter explicitly raised", "status": "Unresolved" }
   ],
   "risks_concerns": [
-    { "risk": "Risk or concern raised", "mentioned_by": "Not clearly stated in transcript", "context": "Context" }
+    { "risk": "Risk or concern explicitly raised", "mentioned_by": "Not clearly stated in transcript", "context": "Context" }
   ],
   "important_highlights": [
-    "Impactful statement or critical observation 1",
-    "Impactful statement or critical observation 2"
+    "A unique impactful statement not already covered above"
   ],
   "quotes_worth_retaining": [
     { "quote": "Verbatim or near-verbatim quote", "speaker": "Not clearly stated in transcript" }
   ],
   "missing_information": [
-    { "area": "Area with missing info (e.g. Action Items)", "issue": "What is missing (e.g. No deadline mentioned)" }
+    { "area": "Area with missing info", "issue": "What is missing" }
   ],
   "one_page_brief": {
     "purpose": "1-2 sentences on what this recording was about",
     "decisions": "Summary of decisions made, or None identified",
     "actions": "Summary of action items, or None identified",
     "risks": "Summary of risks/concerns, or None identified",
-    "pending_items": "Summary of open questions and pending matters"
+    "pending_items": "Summary of open questions and pending matters, or None identified"
   }
 }
 
 ## Final Validation (apply before responding)
 - No hallucinations — every point must trace to the transcript
-- No external assumptions
-- All outputs traceable to transcript content
-- Ambiguities clearly marked as "Not clearly stated in transcript."
-- Decisions and actions separated clearly
-- If a section has no data: use empty array [] or "None identified."
+- No repetition — each section adds unique information only
+- Empty sections must use [] not placeholder strings
 - Return ONLY the JSON object — nothing else`;
 }
 
@@ -1156,11 +1161,11 @@ app.post('/webhook/assemblyai', async (req, res) => {
       .single();
 
     if (existingJob?.status === 'done' || existingJob?.status === 'processing_lock') {
-      console.log('Job already processed or locked, skipping:', transcript_id);
+      console.log('Job already processed or locked, skipping webhook:', transcript_id);
       return;
     }
 
-    // ── Set a processing lock IMMEDIATELY to stop the poll route running simultaneously
+    // Set processing lock IMMEDIATELY so poll route doesn't run simultaneously
     await supabase.from('transcription_jobs')
       .update({ status: 'processing_lock' })
       .eq('id', transcript_id);
@@ -1242,7 +1247,7 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         return res.json(recheckJob.result);
       }
 
-      // If webhook has the lock, wait longer for it to finish — don't double-process
+      // If webhook has the lock, wait for it to finish — don't double-process
       if (recheckJob?.status === 'processing_lock') {
         console.log('Webhook has lock — waiting for it to finish:', jobId);
         await new Promise(resolve => setTimeout(resolve, 8000));
@@ -1272,7 +1277,6 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         return res.json(finalCheck.result);
       }
 
-      // Only process here if webhook genuinely did not run (no lock was ever set)
       console.log('Processing completed transcript (fallback — webhook did not run)...');
       const result = await processTranscript(transcript);
 
