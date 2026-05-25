@@ -49,8 +49,6 @@ const extractBullets = (autoSummary) => {
     const clean = autoSummary.replace(/^```json\s*/i,'').replace(/\s*```$/i,'').trim();
     const parsed = JSON.parse(clean);
     const lines = [];
-
-    // ── NEW 11-section format (has executive_summary) ──────────────────────
     if (parsed.executive_summary) {
       if (parsed.executive_summary.main_purpose)
         lines.push(parsed.executive_summary.main_purpose);
@@ -60,14 +58,11 @@ const extractBullets = (autoSummary) => {
         });
       if (Array.isArray(parsed.key_points))
         parsed.key_points.slice(0,2).forEach(k => {
-          // key_points are objects {number, key_point, supporting_context}
           if (typeof k === 'string') lines.push(k);
           else if (k && typeof k.key_point === 'string') lines.push(k.key_point);
         });
       return lines.slice(0,4);
     }
-
-    // ── OLD format (meeting/sales/doctor etc.) ─────────────────────────────
     if (parsed.summary) lines.push(parsed.summary);
     const extras = parsed.key_decisions || parsed.key_points || parsed.key_concepts || parsed.requirements || [];
     extras.slice(0,3).forEach(e => {
@@ -76,15 +71,14 @@ const extractBullets = (autoSummary) => {
       else if (e && typeof e.task === 'string') lines.push(e.task);
     });
     return lines.slice(0,4);
-
   } catch {}
-
   return autoSummary.split('\n')
     .filter(l => l.trim().match(/^[\d\-\*\•]/))
     .map(l => l.replace(/^[\d\.\-\*\•]\s*/,'').trim())
     .filter(l => l.length > 10)
     .slice(0,4);
 };
+
 const formatDuration = (seconds) => {
   if (!seconds) return null;
   const mins = Math.round(seconds / 60);
@@ -228,6 +222,7 @@ export default function HomeScreen({ navigation }) {
     );
   };
 
+  // ── renderCard: NO calendar button here — it belongs in the actions row ──
   const renderCard = (item) => {
     const bullets    = item.matchContext ? [] : extractBullets(item.autoSummary);
     const duration   = formatDuration(item.duration);
@@ -392,7 +387,7 @@ export default function HomeScreen({ navigation }) {
         )}
       </View>
 
-      {/* ── Action buttons: Record + Upload only (Live removed) ── */}
+      {/* ── Action buttons: Record + Upload + Calendar ── */}
       <View style={styles.actions}>
         <TouchableOpacity style={styles.btnRecord} onPress={() => navigation.navigate('Record')}>
           <Text style={styles.btnIcon}>🎙</Text>
@@ -401,6 +396,11 @@ export default function HomeScreen({ navigation }) {
         <TouchableOpacity style={styles.btnUpload} onPress={() => navigation.navigate('Upload')}>
           <Text style={styles.btnIcon}>📁</Text>
           <Text style={styles.btnTextSecondary}>Upload</Text>
+        </TouchableOpacity>
+        {/* ✅ Calendar button — correctly placed here, not inside renderCard */}
+        <TouchableOpacity style={styles.btnCalendar} onPress={() => navigation.navigate('Calendar')}>
+          <Text style={styles.btnIcon}>📅</Text>
+          <Text style={styles.btnTextCalendar}>Calendar</Text>
         </TouchableOpacity>
       </View>
 
@@ -474,16 +474,19 @@ const styles = StyleSheet.create({
   searchIcon:           { fontSize:16, marginRight:8 },
   searchInput:          { flex:1, padding:10, fontSize:15, color:'#333' },
   clearBtnText:         { fontSize:16, color:'#888', padding:4 },
-  // ── Action buttons: 2-button layout now Live is gone ──
-  actions:              { flexDirection:'row', paddingHorizontal:16, paddingBottom:8, gap:12 },
-  btnRecord:            { flex:1, backgroundColor:'#1A56A0', padding:14, borderRadius:12,
-                          alignItems:'center', flexDirection:'row', justifyContent:'center', gap:8 },
-  btnUpload:            { flex:1, backgroundColor:'#FFFFFF', padding:14, borderRadius:12,
+  actions:              { flexDirection:'row', paddingHorizontal:16, paddingBottom:8, gap:8 },
+  btnRecord:            { flex:1, backgroundColor:'#1A56A0', padding:12, borderRadius:12,
+                          alignItems:'center', flexDirection:'row', justifyContent:'center', gap:6 },
+  btnUpload:            { flex:1, backgroundColor:'#FFFFFF', padding:12, borderRadius:12,
                           alignItems:'center', flexDirection:'row', justifyContent:'center',
-                          gap:8, borderWidth:1.5, borderColor:'#1A56A0' },
-  btnIcon:              { fontSize:18 },
-  btnText:              { color:'#FFFFFF', fontWeight:'bold', fontSize:15 },
-  btnTextSecondary:     { color:'#1A56A0', fontWeight:'bold', fontSize:15 },
+                          gap:6, borderWidth:1.5, borderColor:'#1A56A0' },
+  btnCalendar:          { flex:1, backgroundColor:'#FFFFFF', padding:12, borderRadius:12,
+                          alignItems:'center', flexDirection:'row', justifyContent:'center',
+                          gap:6, borderWidth:1.5, borderColor:'#0D3B7A' },
+  btnIcon:              { fontSize:16 },
+  btnText:              { color:'#FFFFFF', fontWeight:'bold', fontSize:13 },
+  btnTextSecondary:     { color:'#1A56A0', fontWeight:'bold', fontSize:13 },
+  btnTextCalendar:      { color:'#0D3B7A', fontWeight:'bold', fontSize:13 },
   globalChatBtn:        { flexDirection:'row', alignItems:'center', backgroundColor:'#6C3FA0', marginHorizontal:16, marginBottom:8, padding:14, borderRadius:12, gap:12 },
   globalChatIcon:       { fontSize:22 },
   globalChatTextWrapper:{ flex:1 },

@@ -20,6 +20,9 @@ import UploadScreen     from './src/screens/UploadScreen';
 import TranscriptScreen from './src/screens/TranscriptScreen';
 import GlobalChatScreen from './src/screens/GlobalChatScreen';
 import PaywallScreen    from './src/screens/PaywallScreen';
+import CalendarScreen   from './src/screens/CalendarScreen';
+
+// ✅ CalendarScreen import is at the top — NOT as floating JSX here
 
 const Stack = createStackNavigator();
 
@@ -119,6 +122,12 @@ export default function App() {
                     title: 'Upgrade to Pro',
                     headerStyle: { backgroundColor: '#0D3B7A' },
                   }}
+                />
+                {/* ✅ CalendarScreen correctly added inside Stack.Navigator */}
+                <Stack.Screen
+                  name="Calendar"
+                  component={CalendarScreen}
+                  options={{ headerShown: false }}
                 />
               </>
             : <Stack.Screen
