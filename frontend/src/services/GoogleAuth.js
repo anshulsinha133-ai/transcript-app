@@ -10,7 +10,7 @@ const GOOGLE_EXPIRY_KEY   = 'voxnote_google_token_expiry';
 const GOOGLE_EMAIL_KEY    = 'voxnote_google_email';
 
 // ─── Replace with your Web client ID from Google Cloud Console ───────────────
-export const GOOGLE_WEB_CLIENT_ID = '452558234220-17cu[fullstring].apps.googleusercontent.com';
+export const GOOGLE_WEB_CLIENT_ID = '452558234220-17cumq5hfrhj9kth8jlee9290aaoksd4.apps.googleusercontent.com';
 
 // ─── Save token after successful OAuth ───────────────────────────────────────
 export const saveGoogleToken = async (token, expiresIn, email) => {

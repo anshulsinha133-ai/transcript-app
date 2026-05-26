@@ -41,7 +41,8 @@
           "microphonePermission": "VoxNote needs microphone access to record meetings and conversations.",
           "enableBackgroundRecording": true
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {
