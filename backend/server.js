@@ -21,6 +21,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
+// ─── In-memory lock timestamp tracker ────────────────────────────────────────
+// Tracks when processing_lock was set so we can detect stale locks.
+// If a job has been locked for >3 minutes, the webhook likely crashed.
+// We then force-unlock so the poll can reprocess.
+const lockTimestamps = new Map();
+
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -548,6 +554,7 @@ app.post('/webhook/assemblyai', async (req, res) => {
     }
 
     await supabase.from('transcription_jobs').update({ status: 'processing_lock' }).eq('id', transcript_id);
+    lockTimestamps.set(transcript_id, Date.now()); // track when lock was set
 
     const mode = existingJob?.mode || 'default';
     console.log('Fetching transcript from AssemblyAI... Mode:', mode);
@@ -604,22 +611,22 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
       return res.json(cachedJob.result);
     }
 
-    // ✅ FIX 2: Wait for webhook lock, then force-unlock if stale
+    // ✅ KEY FIX: Don't wait 90s — app has 60s timeout and will retry every 10s anyway
+    // Return 'processing' immediately so the app retries.
+    // Only force-unlock if lock is stale (>3 minutes = webhook crashed).
     if (cachedJob?.status === 'processing_lock') {
-      console.log('Webhook has lock — waiting up to 90s:', jobId);
-      for (let i = 0; i < 45; i++) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const { data: lockCheck } = await supabase
-          .from('transcription_jobs').select('status, result').eq('id', jobId).single();
-        if (lockCheck?.status === 'done' && lockCheck?.result) {
-          console.log('Webhook finished — returning result:', jobId);
-          return res.json(lockCheck.result);
-        }
+      const lockAge = Date.now() - (lockTimestamps.get(jobId) || 0);
+      if (lockAge > 180000) {
+        // Lock held for >3 min — webhook crashed after setting lock, force unlock
+        console.warn('⚠️ Stale lock (>3 min) — force unlocking:', jobId);
+        lockTimestamps.delete(jobId);
+        await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
+        // Fall through to reprocess below
+      } else {
+        // Webhook is actively processing — tell app to retry in 10s
+        console.log('Webhook processing (lock age:', Math.round(lockAge/1000) + 's) — retry soon:', jobId);
+        return res.json({ success: true, status: 'processing' });
       }
-      // 90s passed — STALE LOCK: webhook finished but Supabase update failed
-      // Force unlock so we can reprocess
-      console.warn('⚠️ Stale lock detected — force unlocking and reprocessing:', jobId);
-      await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
     }
 
     if (jobId.startsWith('sarvam_')) {
@@ -647,21 +654,19 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         return res.json(recheckJob.result);
       }
 
-      // ✅ FIX 3: Wait for webhook lock, then force-unlock if stale (second check)
+      // ✅ Return immediately if webhook has lock — app retries in 10s
       if (recheckJob?.status === 'processing_lock') {
-        console.log('Webhook just locked — waiting up to 90s:', jobId);
-        for (let i = 0; i < 45; i++) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          const { data: lockWait } = await supabase
-            .from('transcription_jobs').select('status, result').eq('id', jobId).single();
-          if (lockWait?.status === 'done' && lockWait?.result) {
-            console.log('Webhook finished — returning result:', jobId);
-            return res.json(lockWait.result);
-          }
+        const lockAge = Date.now() - (lockTimestamps.get(jobId) || 0);
+        if (lockAge > 180000) {
+          // Stale — force unlock so atomic grab below can proceed
+          console.warn('⚠️ Stale lock (second check, >3 min) — force unlocking:', jobId);
+          lockTimestamps.delete(jobId);
+          await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
+        } else {
+          // Webhook actively processing — tell app to retry
+          console.log('Webhook has lock (second check) — retry soon:', jobId);
+          return res.json({ success: true, status: 'processing' });
         }
-        // Stale lock — force unlock
-        console.warn('⚠️ Stale lock (second check) — force unlocking:', jobId);
-        await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
       }
 
       // Atomic lock grab — only succeeds if status is 'processing'
@@ -673,15 +678,8 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
         .select('id');
 
       if (!lockAttempt || lockAttempt.length === 0) {
-        console.log('Another poll has lock — waiting:', jobId);
-        for (let i = 0; i < 20; i++) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          const { data: pollWait } = await supabase
-            .from('transcription_jobs').select('status, result').eq('id', jobId).single();
-          if (pollWait?.status === 'done' && pollWait?.result) {
-            return res.json(pollWait.result);
-          }
-        }
+        // Another poll grabbed the lock — return immediately, app retries in 10s
+        console.log('Another poll has lock — telling app to retry:', jobId);
         return res.json({ success: true, status: 'processing' });
       }
 
