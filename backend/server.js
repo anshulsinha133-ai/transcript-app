@@ -23,7 +23,7 @@ const supabase = createClient(
 
 // ─── In-memory lock timestamp tracker ────────────────────────────────────────
 // Tracks when processing_lock was set so we can detect stale locks.
-// If a job has been locked for >3 minutes, the webhook likely crashed.
+// If a job has been locked for >5 minutes, the webhook likely crashed.
 // We then force-unlock so the poll can reprocess.
 const lockTimestamps = new Map();
 
@@ -352,42 +352,71 @@ const translateToEnglish = async (text) => {
 // ─── Batch translate ALL utterances in ONE GPT call ───────────────────────────
 // Replaces N individual translateToEnglish calls (one per utterance) with 1 call.
 // For 30 utterances: was 60-90s sequential → now 5-8s. Huge speedup.
-const translateBatch = async (texts) => {
-  if (!texts || texts.length === 0) return [];
+// ─── Translate one chunk of utterances ───────────────────────────────────────
+const translateChunk = async (texts, startIndex) => {
   try {
-    const numbered = texts.map((t, i) => `[${i + 1}] ${t}`).join('\n');
+    const numbered = texts.map((t, i) => `[${startIndex + i + 1}] ${t}`).join('\n');
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: `You are a translator for Indian languages (Hindi, Marathi, mixed Hindi-English etc).
+          content: `You are a translator for Indian languages (Hindi, Marathi, mixed Hindi-English).
 Translate each numbered line to clean natural English.
 Rules:
-1. Keep the SAME numbering format: [1], [2], [3]...
+1. Keep the SAME numbering: [1], [2], [3]...
 2. Keep names, places, company names exactly as-is
-3. If a line is already in English — return it unchanged
-4. One translated line per input line — do NOT merge or split lines
+3. If a line is already English — return it unchanged
+4. One output line per input line — never merge or split
 5. Return ONLY the numbered translations, nothing else`
         },
         { role: 'user', content: numbered }
       ],
-      max_tokens: 4000,
+      max_tokens: 8000, // increased from 4000 — handles longer chunks
     });
     const raw = completion.choices[0].message.content.trim();
-    // Parse [1] line1 \n [2] line2 format back into array
     const lines = raw.split('\n').filter(l => l.match(/^\[\d+\]/));
-    const result = lines.map(l => l.replace(/^\[\d+\]\s*/, '').trim());
-    // Safety: if parse fails or count mismatch, fall back to originals
-    if (result.length !== texts.length) {
-      console.warn(`translateBatch: expected ${texts.length} lines, got ${result.length} — using originals`);
-      return texts;
-    }
-    return result;
+    return lines.map(l => l.replace(/^\[\d+\]\s*/, '').trim());
   } catch (err) {
-    console.error('Batch translation error:', err.message);
-    return texts; // fallback: return originals untranslated
+    console.error('Chunk translation error:', err.message);
+    return texts; // fallback: originals
   }
+};
+
+// ─── Batch translate ALL utterances — handles 100+ by chunking ───────────────
+// Splits into chunks of 40, translates all chunks IN PARALLEL, reassembles.
+// 132 utterances = 4 chunks × 1 GPT call each, all parallel = ~6-8 seconds total.
+const translateBatch = async (texts) => {
+  if (!texts || texts.length === 0) return [];
+
+  const CHUNK_SIZE = 40; // safe for 8000 token limit per chunk
+
+  // Split into chunks
+  const chunks = [];
+  for (let i = 0; i < texts.length; i += CHUNK_SIZE) {
+    chunks.push({ texts: texts.slice(i, i + CHUNK_SIZE), startIndex: i });
+  }
+
+  console.log(`translateBatch: ${texts.length} utterances → ${chunks.length} chunk(s) in parallel`);
+
+  // Translate all chunks simultaneously
+  const chunkResults = await Promise.all(
+    chunks.map(({ texts: chunkTexts, startIndex }) =>
+      translateChunk(chunkTexts, startIndex)
+    )
+  );
+
+  // Reassemble in order
+  const result = chunkResults.flat();
+
+  if (result.length !== texts.length) {
+    console.warn(`translateBatch: expected ${texts.length}, got ${result.length} — using originals for mismatched entries`);
+    // Partial fallback: use translated where available, original where not
+    return texts.map((orig, i) => result[i] || orig);
+  }
+
+  console.log(`translateBatch: ✅ translated ${result.length} utterances`);
+  return result;
 };
 
 const generateSummary = async (text, mode) => {
@@ -609,8 +638,10 @@ app.post('/webhook/assemblyai', async (req, res) => {
       return;
     }
 
-    await supabase.from('transcription_jobs').update({ status: 'processing_lock' }).eq('id', transcript_id);
-    lockTimestamps.set(transcript_id, Date.now()); // track when lock was set
+    await supabase.from('transcription_jobs')
+      .update({ status: 'processing_lock', locked_at: new Date().toISOString() })
+      .eq('id', transcript_id);
+    lockTimestamps.set(transcript_id, Date.now()); // in-memory backup
 
     const mode = existingJob?.mode || 'default';
     console.log('Fetching transcript from AssemblyAI... Mode:', mode);
@@ -660,27 +691,38 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
     console.log('Checking status for job:', jobId);
 
     const { data: cachedJob } = await supabase
-      .from('transcription_jobs').select('status, result, mode').eq('id', jobId).single();
+      .from('transcription_jobs').select('status, result, mode, locked_at').eq('id', jobId).single();
 
-    if (cachedJob?.status === 'done' && cachedJob?.result) {
-      console.log('Returning cached result for job:', jobId);
-      return res.json(cachedJob.result);
+    // ✅ Status done — return result
+    if (cachedJob?.status === 'done') {
+      if (cachedJob?.result) {
+        console.log('Returning cached result for job:', jobId);
+        return res.json(cachedJob.result);
+      } else {
+        // Done but result is null — result column missing or not saved
+        // Force reprocess
+        console.warn('⚠️ Status done but result is null — forcing reprocess:', jobId);
+        await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
+      }
     }
 
-    // ✅ KEY FIX: Don't wait 90s — app has 60s timeout and will retry every 10s anyway
-    // Return 'processing' immediately so the app retries.
-    // Only force-unlock if lock is stale (>3 minutes = webhook crashed).
+    // ✅ Use DB-stored locked_at so stale detection survives server restarts
     if (cachedJob?.status === 'processing_lock') {
-      const lockAge = Date.now() - (lockTimestamps.get(jobId) || 0);
-      if (lockAge > 180000) {
-        // Lock held for >3 min — webhook crashed after setting lock, force unlock
-        console.warn('⚠️ Stale lock (>3 min) — force unlocking:', jobId);
+      // Prefer DB timestamp (survives restarts) over in-memory
+      const dbLockedAt = cachedJob.locked_at ? new Date(cachedJob.locked_at).getTime() : 0;
+      const memLockedAt = lockTimestamps.get(jobId) || 0;
+      const lockedAt = dbLockedAt || memLockedAt;
+      const lockAge = lockedAt > 0 ? Date.now() - lockedAt : 0;
+
+      if (lockAge > 300000 || lockedAt === 0) {
+        // Lock held for >5 min OR no timestamp at all — stale, force unlock
+        console.warn(`⚠️ Stale lock (age: ${Math.round(lockAge/1000)}s) — force unlocking:`, jobId);
         lockTimestamps.delete(jobId);
         await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
         // Fall through to reprocess below
       } else {
-        // Webhook is actively processing — tell app to retry in 10s
-        console.log('Webhook processing (lock age:', Math.round(lockAge/1000) + 's) — retry soon:', jobId);
+        // Webhook actively processing — return immediately, app retries in 10s
+        console.log(`Webhook processing (lock age: ${Math.round(lockAge/1000)}s) — retry soon:`, jobId);
         return res.json({ success: true, status: 'processing' });
       }
     }
@@ -703,38 +745,43 @@ app.get('/transcribe-status/:jobId', async (req, res) => {
 
     if (transcript.status === 'completed') {
       const { data: recheckJob } = await supabase
-        .from('transcription_jobs').select('status, result, mode').eq('id', jobId).single();
+        .from('transcription_jobs').select('status, result, mode, locked_at').eq('id', jobId).single();
 
-      if (recheckJob?.status === 'done' && recheckJob?.result) {
-        console.log('Webhook already completed — returning result:', jobId);
-        return res.json(recheckJob.result);
+      if (recheckJob?.status === 'done') {
+        if (recheckJob?.result) {
+          console.log('Webhook already completed — returning result:', jobId);
+          return res.json(recheckJob.result);
+        }
+        // Done but null result — fall through to reprocess
+        console.warn('⚠️ Recheck: done but null result — reprocessing:', jobId);
+        await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
       }
 
-      // ✅ Return immediately if webhook has lock — app retries in 10s
+      // ✅ Use DB locked_at for stale detection (survives restarts)
       if (recheckJob?.status === 'processing_lock') {
-        const lockAge = Date.now() - (lockTimestamps.get(jobId) || 0);
-        if (lockAge > 180000) {
-          // Stale — force unlock so atomic grab below can proceed
-          console.warn('⚠️ Stale lock (second check, >3 min) — force unlocking:', jobId);
+        const dbLockedAt = recheckJob.locked_at ? new Date(recheckJob.locked_at).getTime() : 0;
+        const memLockedAt = lockTimestamps.get(jobId) || 0;
+        const lockedAt = dbLockedAt || memLockedAt;
+        const lockAge = lockedAt > 0 ? Date.now() - lockedAt : 0;
+        if (lockAge > 300000 || lockedAt === 0) {
+          console.warn(`⚠️ Stale lock recheck (age: ${Math.round(lockAge/1000)}s) — force unlocking:`, jobId);
           lockTimestamps.delete(jobId);
           await supabase.from('transcription_jobs').update({ status: 'processing' }).eq('id', jobId);
         } else {
-          // Webhook actively processing — tell app to retry
-          console.log('Webhook has lock (second check) — retry soon:', jobId);
+          console.log(`Webhook has lock (recheck, age: ${Math.round(lockAge/1000)}s) — retry soon:`, jobId);
           return res.json({ success: true, status: 'processing' });
         }
       }
 
-      // Atomic lock grab — only succeeds if status is 'processing'
+      // Also set locked_at when poll grabs lock
       const { data: lockAttempt } = await supabase
         .from('transcription_jobs')
-        .update({ status: 'processing_lock' })
+        .update({ status: 'processing_lock', locked_at: new Date().toISOString() })
         .eq('id', jobId)
         .eq('status', 'processing')
         .select('id');
 
       if (!lockAttempt || lockAttempt.length === 0) {
-        // Another poll grabbed the lock — return immediately, app retries in 10s
         console.log('Another poll has lock — telling app to retry:', jobId);
         return res.json({ success: true, status: 'processing' });
       }
